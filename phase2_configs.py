@@ -20,7 +20,7 @@ CONFIGS_DIR    = "/rlwrld1/home/yashu/rlwrld_isaac/gr00t/configs"
 EMBODIMENT_TAG = "new_embodiment"
 DATA_CONFIG    = "allex_thetwo_ck40_egostereo"
 WEIGHT         = 1.0
-OUTPUT_BASE    = "/rlwrld2/yashu/dataset"
+OUTPUT_BASE    = "/rlwrld1/home/yashu/dataset"
 
 
 def generate_yaml_configs(dataset_name: str, split_paths: dict) -> dict:

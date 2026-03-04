@@ -20,7 +20,7 @@ from pathlib import Path
 
 # ── Fixed paths (do not change) ──────────────────────────────────────
 SAMPLER_SCRIPT = "/rlwrld1/home/yashu/sample_lerobot_dataset_updated.py"
-OUTPUT_BASE    = "/rlwrld2/yashu/dataset"
+OUTPUT_BASE    = "/rlwrld1/home/yashu/dataset"
 SPLITS         = [10, 50, 100]
 
 
