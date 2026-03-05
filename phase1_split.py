@@ -83,6 +83,12 @@ def split_dataset(dataset_path: str, dataset_name: str) -> dict:
             str(end_idx)
         ]
 
+        # Skip if folder already exists
+        if Path(output_dir).exists():
+            print(f"[Phase 1] ⏭️  Already exists, skipping → {output_dir}\n")
+            output_paths[pct] = output_dir
+            continue
+
         print(f"[Phase 1]   running command...")
         result = subprocess.run(cmd, text=True)
 
