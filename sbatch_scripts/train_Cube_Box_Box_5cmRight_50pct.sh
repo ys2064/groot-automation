@@ -2,10 +2,11 @@
 #SBATCH --job-name=Cube_Box_Box_5cmRight_50pct
 #SBATCH --output=/rlwrld1/home/yashu/rlwrld_isaac/gr00t/log/%j-Cube_Box_Box_5cmRight_50pct.out
 #SBATCH --error=/rlwrld1/home/yashu/rlwrld_isaac/gr00t/log/%j-Cube_Box_Box_5cmRight_50pct.err
-#SBATCH --partition=yashu
+#SBATCH --partition=rlwrld
 #SBATCH --gres=gpu:4
 #SBATCH --time=48:00:00
 #SBATCH --requeue
+#SBATCH --exclude=worker-node105
 
 # Standard Environment Setup
 source /rlwrld1/home/yashu/rlwrld_isaac/.venv/bin/activate
