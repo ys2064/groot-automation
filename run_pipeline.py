@@ -24,12 +24,12 @@ from phase2_configs import generate_yaml_configs
 from phase3_train   import submit_training_jobs
 
 # Import notifications
-from notify import (
+from notify import notify_pipeline_start, notify_phase1_done, notify_phase2_done, notify_phase3_done, notify_training_in_progress, notify_error
     notify_pipeline_start,
     notify_phase1_done,
     notify_phase2_done,
     notify_phase3_done,
-    notify_pipeline_complete,
+    notify_training_in_progress,
     notify_error,
 )
 
@@ -88,7 +88,7 @@ def run_pipeline(
         raise
 
     # ── Pipeline Complete ──────────────────────────────────────────────
-    notify_pipeline_complete(dataset_name, job_info)
+    notify_training_in_progress(dataset_name, job_info)
 
     print(f"\n###########################################################")
     print(f"# PIPELINE COMPLETE!")

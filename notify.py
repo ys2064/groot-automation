@@ -64,12 +64,22 @@ def notify_phase3_done(dataset_name: str, job_info: dict):
     )
 
 
-def notify_pipeline_complete(dataset_name: str, job_info: dict):
+def notify_training_in_progress(dataset_name: str, job_info: dict):
     lines = "\n".join([f">  `{pct}%` -> Job ID: `{info['job_id']}`" for pct, info in job_info.items()])
     _send(
-        f"🎉 *Pipeline Complete!*\n"
+        f"⏳ *Training in Progress*\n"
         f">  *Dataset:* `{dataset_name}`\n"
         f"{lines}\n"
+        f">  *Time:* `{_time()}`"
+    )
+
+
+def notify_training_complete(dataset_name: str, pct: int, output_dir: str):
+    _send(
+        f"🎉 *Training Complete!*\n"
+        f">  *Dataset:* `{dataset_name}`\n"
+        f">  *Split:*   `{pct}%`\n"
+        f">  *Checkpoints saved to:* `{output_dir}`\n"
         f">  *Time:* `{_time()}`"
     )
 

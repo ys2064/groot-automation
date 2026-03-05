@@ -72,6 +72,14 @@ python scripts/gr00t_finetune.py \\
   --max-steps 30000 \\
   --save-steps 10000 \\
   --dataloader-num-workers 8
+
+# Notify Slack: Training Complete
+python3 -c "
+import sys
+sys.path.insert(0, '{GROOT_DIR}/automating_groot')
+from notify import notify_training_complete
+notify_training_complete('{dataset_name}', {pct}, '$OUT_DIR')
+"
 """
     Path(sbatch_path).write_text(content)
     print(f"[Phase 3] Generated sbatch: train_{job_name}.sh")
