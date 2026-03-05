@@ -1,6 +1,7 @@
 """
 Phase 1 - Dataset Splitting
 Automatically splits a dataset into 10%, 50%, 100% subsets.
+If total episodes < 50, skips splitting and uses 100% only.
 
 Usage (standalone):
     python phase1_split.py \
@@ -19,9 +20,10 @@ from pathlib import Path
 
 
 # ── Fixed paths (do not change) ──────────────────────────────────────
-SAMPLER_SCRIPT = "/rlwrld1/home/yashu/sample_lerobot_dataset_updated.py"
-OUTPUT_BASE    = "/rlwrld1/home/yashu/dataset"
-SPLITS         = [10, 50, 100]
+SAMPLER_SCRIPT  = "/rlwrld1/home/yashu/sample_lerobot_dataset_updated.py"
+OUTPUT_BASE     = "/rlwrld1/home/yashu/dataset"
+SPLITS          = [10, 50, 100]
+MIN_EPS_TO_SPLIT = 50   # if total episodes < this, skip splitting
 
 
 def get_total_episodes(dataset_path: str) -> int:
@@ -50,6 +52,7 @@ def calc_end_index(total: int, pct: int) -> int:
 def split_dataset(dataset_path: str, dataset_name: str) -> dict:
     """
     Split a dataset into 10%, 50%, 100% subsets automatically.
+    If total episodes < 50, skips splitting and uses full dataset (100%) only.
 
     Args:
         dataset_path : Full path to the input dataset
@@ -57,6 +60,7 @@ def split_dataset(dataset_path: str, dataset_name: str) -> dict:
 
     Returns:
         dict e.g. {10: '/path/-10pct', 50: '/path/-50pct', 100: '/path/-100pct'}
+             OR   {100: '/path/-100pct'}  if episodes < 50
     """
     print(f"\n{'='*60}")
     print(f"[Phase 1] Starting dataset split")
@@ -67,7 +71,17 @@ def split_dataset(dataset_path: str, dataset_name: str) -> dict:
     total        = get_total_episodes(dataset_path)
     output_paths = {}
 
-    for pct in SPLITS:
+    # ── Check if dataset is too small to split ────────────────────────
+    if total < MIN_EPS_TO_SPLIT:
+        print(f"[Phase 1] ⚠️  Only {total} episodes found (< {MIN_EPS_TO_SPLIT})")
+        print(f"[Phase 1] ⏭️  Skipping 10%/50% splits — using full dataset (100%) only\n")
+        splits_to_run = [100]
+    else:
+        print(f"[Phase 1] ✅ {total} episodes found — running full 10/50/100% splits\n")
+        splits_to_run = SPLITS
+    # ─────────────────────────────────────────────────────────────────
+
+    for pct in splits_to_run:
         end_idx    = calc_end_index(total, pct)
         output_dir = f"{OUTPUT_BASE}/{dataset_name}-{pct}pct"
 
