@@ -23,6 +23,16 @@ from phase1_split   import split_dataset
 from phase2_configs import generate_yaml_configs
 from phase3_train   import submit_training_jobs
 
+# Import notifications
+from notify import (
+    notify_pipeline_start,
+    notify_phase1_done,
+    notify_phase2_done,
+    notify_phase3_done,
+    notify_pipeline_complete,
+    notify_error,
+)
+
 
 def run_pipeline(
     dataset_path: str,
@@ -37,29 +47,49 @@ def run_pipeline(
     print(f"# Partition: {partition}")
     print(f"###########################################################\n")
 
-    # Phase 1 - Split Dataset
-    print(">>> PHASE 1: Splitting dataset...")
-    split_paths = split_dataset(
-        dataset_path = dataset_path,
-        dataset_name = dataset_name
-    )
+    # Notify pipeline start
+    notify_pipeline_start(dataset_name, dataset_path, partition)
 
-    # Phase 2 - Generate YAML Configs
-    print(">>> PHASE 2: Generating YAML configs...")
-    yaml_paths = generate_yaml_configs(
-        dataset_name = dataset_name,
-        split_paths  = split_paths
-    )
+    # ── Phase 1 - Split Dataset ────────────────────────────────────────
+    try:
+        print(">>> PHASE 1: Splitting dataset...")
+        split_paths = split_dataset(
+            dataset_path = dataset_path,
+            dataset_name = dataset_name
+        )
+        notify_phase1_done(dataset_name, split_paths)
+    except Exception as e:
+        notify_error("Phase 1 - Split Dataset", dataset_name, str(e))
+        raise
 
-    # Phase 3 - Submit Training Jobs
-    print(">>> PHASE 3: Submitting training jobs to SLURM...")
-    job_info = submit_training_jobs(
-        dataset_name = dataset_name,
-        yaml_paths   = yaml_paths,
-        partition    = partition
-    )
+    # ── Phase 2 - Generate YAML Configs ───────────────────────────────
+    try:
+        print(">>> PHASE 2: Generating YAML configs...")
+        yaml_paths = generate_yaml_configs(
+            dataset_name = dataset_name,
+            split_paths  = split_paths
+        )
+        notify_phase2_done(dataset_name, yaml_paths)
+    except Exception as e:
+        notify_error("Phase 2 - YAML Configs", dataset_name, str(e))
+        raise
 
-    # Summary
+    # ── Phase 3 - Submit Training Jobs ────────────────────────────────
+    try:
+        print(">>> PHASE 3: Submitting training jobs to SLURM...")
+        job_info = submit_training_jobs(
+            dataset_name = dataset_name,
+            yaml_paths   = yaml_paths,
+            partition    = partition
+        )
+        notify_phase3_done(dataset_name, job_info)
+    except Exception as e:
+        notify_error("Phase 3 - SLURM Submit", dataset_name, str(e))
+        raise
+
+    # ── Pipeline Complete ──────────────────────────────────────────────
+    notify_pipeline_complete(dataset_name, job_info)
+
     print(f"\n###########################################################")
     print(f"# PIPELINE COMPLETE!")
     print(f"# Training jobs submitted:")
