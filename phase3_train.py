@@ -4,7 +4,7 @@ Phase 3 - Generate SBATCH Scripts and Submit Training Jobs to SLURM
 Usage (standalone):
     python phase3_train.py \
         --dataset-name Cube_Box_Box_5cmRight \
-        --partition yashu
+        --partition rlwrld
 
 Usage (from run_pipeline.py):
     from phase3_train import submit_training_jobs
@@ -28,30 +28,16 @@ def generate_train_sbatch(
     dataset_name: str,
     pct: int,
     yaml_path: str,
-    partition: str = "yashu"
+    partition: str = "rlwrld"
 ) -> str:
-    """
-    Generate a SBATCH training script for one split.
-
-    Args:
-        dataset_name : e.g. Cube_Box_Box_5cmRight
-        pct          : 10, 50, or 100
-        yaml_path    : path to YAML config from Phase 2
-        partition    : SLURM partition to use
-
-    Returns:
-        Path to the generated sbatch script
-    """
     job_name   = f"{dataset_name}_{pct}pct"
     output_dir = f"{OUTPUT_BASE}/{dataset_name}_{pct}pct"
 
-    # Create folders if they do not exist
     Path(SBATCH_DIR).mkdir(parents=True, exist_ok=True)
     Path(f"{GROOT_DIR}/log").mkdir(parents=True, exist_ok=True)
 
     sbatch_path = f"{SBATCH_DIR}/train_{job_name}.sh"
 
-    # Matches your exact real sbatch format
     content = f"""#!/bin/bash
 #SBATCH --job-name={job_name}
 #SBATCH --output={GROOT_DIR}/log/%j-{job_name}.out
@@ -76,15 +62,15 @@ mkdir -p "$OUT_DIR"
 
 # Launch Training
 cd {GROOT_DIR}
-python scripts/gr00t_finetune.py \
-  --num-gpus 4 \
-  --batch-size 32 \
-  --learning_rate 1e-4 \
-  --tune-visual \
-  --output-dir "$OUT_DIR" \
-  --data-config {yaml_path} \
-  --max-steps 30000 \
-  --save-steps 10000 \
+python scripts/gr00t_finetune.py \\
+  --num-gpus 4 \\
+  --batch-size 32 \\
+  --learning_rate 1e-4 \\
+  --tune-visual \\
+  --output-dir "$OUT_DIR" \\
+  --data-config {yaml_path} \\
+  --max-steps 30000 \\
+  --save-steps 10000 \\
   --dataloader-num-workers 8
 """
     Path(sbatch_path).write_text(content)
@@ -93,12 +79,6 @@ python scripts/gr00t_finetune.py \
 
 
 def submit_job(sbatch_path: str) -> str:
-    """
-    Submit a SBATCH script to SLURM.
-
-    Returns:
-        SLURM job ID as string
-    """
     result = subprocess.run(
         ["sbatch", sbatch_path],
         capture_output=True,
@@ -111,7 +91,6 @@ def submit_job(sbatch_path: str) -> str:
             f"Error: {result.stderr}"
         )
 
-    # sbatch prints: "Submitted batch job 12345"
     job_id = result.stdout.strip().split()[-1]
     print(f"[Phase 3] Submitted to SLURM -> Job ID: {job_id}")
     return job_id
@@ -120,24 +99,8 @@ def submit_job(sbatch_path: str) -> str:
 def submit_training_jobs(
     dataset_name: str,
     yaml_paths: dict,
-    partition: str = "yashu"
+    partition: str = "rlwrld"
 ) -> dict:
-    """
-    Generate and submit all 3 training jobs to SLURM.
-
-    Args:
-        dataset_name : e.g. Cube_Box_Box_5cmRight
-        yaml_paths   : dict from Phase 2
-                       {10: /path/yaml, 50: /path/yaml, 100: /path/yaml}
-        partition    : SLURM partition
-
-    Returns:
-        dict {
-            10:  {job_id, output_dir, sbatch_path},
-            50:  {job_id, output_dir, sbatch_path},
-            100: {job_id, output_dir, sbatch_path}
-        }
-    """
     print(f"\n{'='*60}")
     print(f"[Phase 3] Submitting training jobs for: {dataset_name}")
     print(f"[Phase 3] Partition: {partition}")
@@ -169,23 +132,13 @@ def submit_training_jobs(
     return job_info
 
 
-# Run directly from command line
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Phase 3: Submit training jobs")
-    parser.add_argument(
-        "--dataset-name",
-        required=True,
-        help="Short name e.g. Cube_Box_Box_5cmRight"
-    )
-    parser.add_argument(
-        "--partition",
-        default="yashu",
-        help="SLURM partition (default: yashu)"
-    )
+    parser.add_argument("--dataset-name", required=True, help="Short name e.g. Cube_Box_Box_5cmRight")
+    parser.add_argument("--partition", default="rlwrld", help="SLURM partition (default: rlwrld)")
     args = parser.parse_args()
 
-    # Rebuild yaml_paths from Phase 2 output structure
     yaml_paths = {
         10:  f"{CONFIGS_DIR}/groot_{args.dataset_name}_10pct.yaml",
         50:  f"{CONFIGS_DIR}/groot_{args.dataset_name}_50pct.yaml",
