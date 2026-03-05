@@ -2,8 +2,8 @@
 run_pipeline.py - Master Script
 Runs Phase 1, 2, and 3 automatically with one command.
 
-Usage:
-    python run_pipeline.py \
+Usage (from anywhere):
+    python3 /rlwrld1/home/yashu/rlwrld_isaac/gr00t/automating_groot/run_pipeline.py \
         --dataset-path /rlwrld-dataset/.../37-Cube_Box_Box-5cmRight-9029bbfd \
         --dataset-name Cube_Box_Box_5cmRight \
         --partition rlwrld
@@ -11,6 +11,12 @@ Usage:
 
 import argparse
 import sys
+from pathlib import Path
+
+# ── Make imports work from ANY directory ──────────────────────────────
+PIPELINE_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(PIPELINE_DIR))
+# ──────────────────────────────────────────────────────────────────────
 
 # Import all phases
 from phase1_split   import split_dataset
@@ -23,17 +29,6 @@ def run_pipeline(
     dataset_name: str,
     partition: str = "rlwrld"
 ) -> dict:
-    """
-    Run the full training pipeline automatically.
-
-    Args:
-        dataset_path : Full path to input dataset
-        dataset_name : Short name e.g. Cube_Box_Box_5cmRight
-        partition    : SLURM partition (default: rlwrld)
-
-    Returns:
-        dict with job_info from Phase 3
-    """
 
     print(f"\n###########################################################")
     print(f"# GROOT AUTOMATION PIPELINE")
@@ -86,21 +81,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="GR00T Automation Pipeline - Runs Phase 1, 2, and 3"
     )
-    parser.add_argument(
-        "--dataset-path",
-        required=True,
-        help="Full path to input dataset"
-    )
-    parser.add_argument(
-        "--dataset-name",
-        required=True,
-        help="Short name e.g. Cube_Box_Box_5cmRight"
-    )
-    parser.add_argument(
-        "--partition",
-        default="rlwrld",
-        help="SLURM partition (default: rlwrld)"
-    )
+    parser.add_argument("--dataset-path", required=True, help="Full path to input dataset")
+    parser.add_argument("--dataset-name", required=True, help="Short name e.g. Cube_Box_Box_5cmRight")
+    parser.add_argument("--partition", default="rlwrld", help="SLURM partition (default: rlwrld)")
 
     args = parser.parse_args()
 
