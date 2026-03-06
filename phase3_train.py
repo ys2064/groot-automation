@@ -60,7 +60,44 @@ export MKL_NUM_THREADS=8
 OUT_DIR="{output_dir}"
 mkdir -p "$OUT_DIR"
 
-# Launch Training
+# ── Checkpoint Watcher (runs in background) ───────────────────────────
+python3 - << 'WATCHER'
+import os, time, sys
+sys.path.insert(0, '{GROOT_DIR}/automating_groot')
+from notify import notify_checkpoint_saved
+
+output_dir  = "{output_dir}"
+dataset     = "{dataset_name}"
+pct         = {pct}
+notified    = set()
+
+print("[watcher] Started — watching:", output_dir)
+
+while True:
+    time.sleep(30)  # check every 30 seconds
+    try:
+        entries = os.listdir(output_dir)
+    except FileNotFoundError:
+        continue
+
+    for entry in sorted(entries):
+        if entry.startswith("checkpoint-") and entry not in notified:
+            step = int(entry.split("-")[1])
+            ckpt_path = os.path.join(output_dir, entry)
+            print(f"[watcher] New checkpoint detected: {{entry}}")
+            notify_checkpoint_saved(dataset, pct, step, ckpt_path)
+            notified.add(entry)
+
+    # Stop watcher once training_done flag is set
+    if os.path.exists(os.path.join(output_dir, ".training_done")):
+        print("[watcher] Training done flag detected — exiting watcher")
+        break
+WATCHER
+&
+WATCHER_PID=$!
+echo "[slurm] Checkpoint watcher started with PID $WATCHER_PID"
+
+# ── Launch Training ───────────────────────────────────────────────────
 cd {GROOT_DIR}
 python scripts/gr00t_finetune.py \\
   --num-gpus 4 \\
@@ -73,7 +110,11 @@ python scripts/gr00t_finetune.py \\
   --save-steps 10000 \\
   --dataloader-num-workers 8
 
-# Notify Slack: Training Complete
+# ── Training Done ─────────────────────────────────────────────────────
+touch "$OUT_DIR/.training_done"   # signal watcher to stop
+wait $WATCHER_PID                 # wait for watcher to finish
+
+# ── Notify Slack: Training Complete ──────────────────────────────────
 python3 -c "
 import sys
 sys.path.insert(0, '{GROOT_DIR}/automating_groot')
@@ -109,54 +150,42 @@ def submit_training_jobs(
     yaml_paths: dict,
     partition: str = "rlwrld"
 ) -> dict:
+
     print(f"\n{'='*60}")
-    print(f"[Phase 3] Submitting training jobs for: {dataset_name}")
-    print(f"[Phase 3] Partition: {partition}")
+    print(f"[Phase 3] Submitting training jobs")
+    print(f"[Phase 3] Dataset : {dataset_name}")
+    print(f"[Phase 3] Splits  : {list(yaml_paths.keys())}")
     print(f"{'='*60}\n")
 
     job_info = {}
 
     for pct, yaml_path in yaml_paths.items():
-        print(f"[Phase 3] --- {pct}% training job ---")
-
         sbatch_path = generate_train_sbatch(
-            dataset_name, pct, yaml_path, partition
+            dataset_name = dataset_name,
+            pct          = pct,
+            yaml_path    = yaml_path,
+            partition    = partition
         )
         job_id = submit_job(sbatch_path)
-
         job_info[pct] = {
-            "job_id":      job_id,
-            "output_dir":  f"{OUTPUT_BASE}/{dataset_name}_{pct}pct",
-            "sbatch_path": sbatch_path,
+            "job_id"      : job_id,
+            "sbatch_path" : sbatch_path,
+            "yaml_path"   : yaml_path,
         }
-        print()
 
-    print(f"{'='*60}")
-    print(f"[Phase 3] All 3 training jobs submitted!")
+    print(f"\n{'='*60}")
+    print(f"[Phase 3] ✅ All jobs submitted!")
     for pct, info in job_info.items():
-        print(f"  {pct}%  -> Job ID: {info['job_id']} | output: {info['output_dir']}")
+        print(f"  {pct}%  -> Job ID: {info['job_id']}")
     print(f"{'='*60}\n")
 
     return job_info
 
 
+# ── Run directly from command line ────────────────────────────────────
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Phase 3: Submit training jobs")
-    parser.add_argument("--dataset-name", required=True, help="Short name e.g. Cube_Box_Box_5cmRight")
-    parser.add_argument("--partition", default="rlwrld", help="SLURM partition (default: rlwrld)")
+    parser.add_argument("--dataset-name", required=True)
+    parser.add_argument("--partition", default="rlwrld")
     args = parser.parse_args()
-
-    yaml_paths = {
-        10:  f"{CONFIGS_DIR}/groot_{args.dataset_name}_10pct.yaml",
-        50:  f"{CONFIGS_DIR}/groot_{args.dataset_name}_50pct.yaml",
-        100: f"{CONFIGS_DIR}/groot_{args.dataset_name}_100pct.yaml",
-    }
-
-    job_info = submit_training_jobs(
-        dataset_name = args.dataset_name,
-        yaml_paths   = yaml_paths,
-        partition    = args.partition
-    )
-
-    print("Job info:", job_info)

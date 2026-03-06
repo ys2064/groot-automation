@@ -74,12 +74,34 @@ def notify_training_in_progress(dataset_name: str, job_info: dict):
     )
 
 
+def notify_checkpoint_saved(dataset_name: str, pct: int, step: int, checkpoint_path: str):
+    _send(
+        f"💾 *Checkpoint Saved — {step:,} steps*\n"
+        f">  *Dataset:* `{dataset_name}`\n"
+        f">  *Split:*   `{pct}%`\n"
+        f">  *Path:*    `{checkpoint_path}`\n"
+        f">  *Time:*    `{_time()}`"
+    )
+
+
 def notify_training_complete(dataset_name: str, pct: int, output_dir: str):
+    import os
+    # Collect all checkpoint paths
+    try:
+        checkpoints = sorted([
+            f"{output_dir}/{d}" for d in os.listdir(output_dir)
+            if d.startswith("checkpoint-")
+        ])
+        ckpt_lines = "\n".join([f">  `{p}`" for p in checkpoints])
+    except Exception:
+        ckpt_lines = f">  `{output_dir}`"
+
     _send(
         f"🎉 *Training Complete!*\n"
         f">  *Dataset:* `{dataset_name}`\n"
         f">  *Split:*   `{pct}%`\n"
-        f">  *Checkpoints saved to:* `{output_dir}`\n"
+        f">  *Checkpoints:*\n"
+        f"{ckpt_lines}\n"
         f">  *Time:* `{_time()}`"
     )
 
