@@ -36,7 +36,39 @@ def generate_train_sbatch(
     Path(SBATCH_DIR).mkdir(parents=True, exist_ok=True)
     Path(f"{GROOT_DIR}/log").mkdir(parents=True, exist_ok=True)
 
-    sbatch_path = f"{SBATCH_DIR}/train_{job_name}.sh"
+    sbatch_path  = f"{SBATCH_DIR}/train_{job_name}.sh"
+    watcher_path = f"{SBATCH_DIR}/watcher_{job_name}.py"
+
+    # Write watcher as a separate Python file
+    watcher_script = f"""import os, time, sys
+sys.path.insert(0, '{GROOT_DIR}/automating_groot')
+from notify import notify_checkpoint_saved
+
+output_dir = "{output_dir}"
+dataset    = "{dataset_name}"
+pct        = {pct}
+notified   = set()
+
+print('[watcher] Started, watching:', output_dir, flush=True)
+
+while True:
+    time.sleep(30)
+    try:
+        entries = os.listdir(output_dir)
+    except FileNotFoundError:
+        continue
+    for entry in sorted(entries):
+        if entry.startswith('checkpoint-') and entry not in notified:
+            step = int(entry.split('-')[1])
+            ckpt_path = os.path.join(output_dir, entry)
+            print(f'[watcher] New checkpoint: {{entry}}', flush=True)
+            notify_checkpoint_saved(dataset, pct, step, ckpt_path)
+            notified.add(entry)
+    if os.path.exists(os.path.join(output_dir, '.training_done')):
+        print('[watcher] Done flag detected, exiting', flush=True)
+        break
+"""
+    Path(watcher_path).write_text(watcher_script)
 
     content = f"""#!/bin/bash
 #SBATCH --job-name={job_name}
@@ -61,39 +93,7 @@ OUT_DIR="{output_dir}"
 mkdir -p "$OUT_DIR"
 
 # ── Checkpoint Watcher (runs in background) ───────────────────────────
-python3 - << 'WATCHER'
-import os, time, sys
-sys.path.insert(0, '{GROOT_DIR}/automating_groot')
-from notify import notify_checkpoint_saved
-
-output_dir  = "{output_dir}"
-dataset     = "{dataset_name}"
-pct         = {pct}
-notified    = set()
-
-print("[watcher] Started — watching:", output_dir)
-
-while True:
-    time.sleep(30)  # check every 30 seconds
-    try:
-        entries = os.listdir(output_dir)
-    except FileNotFoundError:
-        continue
-
-    for entry in sorted(entries):
-        if entry.startswith("checkpoint-") and entry not in notified:
-            step = int(entry.split("-")[1])
-            ckpt_path = os.path.join(output_dir, entry)
-            print(f"[watcher] New checkpoint detected: {{entry}}")
-            notify_checkpoint_saved(dataset, pct, step, ckpt_path)
-            notified.add(entry)
-
-    # Stop watcher once training_done flag is set
-    if os.path.exists(os.path.join(output_dir, ".training_done")):
-        print("[watcher] Training done flag detected — exiting watcher")
-        break
-WATCHER
-&
+python3 {watcher_path} &
 WATCHER_PID=$!
 echo "[slurm] Checkpoint watcher started with PID $WATCHER_PID"
 
