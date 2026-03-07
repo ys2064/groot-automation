@@ -86,7 +86,6 @@ def notify_checkpoint_saved(dataset_name: str, pct: int, step: int, checkpoint_p
 
 def notify_training_complete(dataset_name: str, pct: int, output_dir: str):
     import os
-    # Collect all checkpoint paths
     try:
         checkpoints = sorted([
             f"{output_dir}/{d}" for d in os.listdir(output_dir)
@@ -111,5 +110,31 @@ def notify_error(phase: str, dataset_name: str, error: str):
         f"❌ *ERROR — {phase}*\n"
         f">  *Dataset:* `{dataset_name}`\n"
         f">  *Error:*   `{error}`\n"
+        f">  *Time:*    `{_time()}`"
+    )
+
+
+# ── NEW: Phase 4 Eval Notifications ──────────────────────────────────
+
+def notify_eval_started(dataset_name: str, eval_job_info: dict):
+    lines = "\n".join([
+        f">  `groot{pct}` -> Job ID: `{info['job_id']}`"
+        for pct, info in eval_job_info.items()
+    ])
+    _send(
+        f"🤖 *Evaluation Started!*\n"
+        f">  *Dataset:*  `{dataset_name}`\n"
+        f">  *Task:*     `{list(eval_job_info.values())[0]['task_name']}`\n"
+        f"{lines}\n"
+        f">  *Time:* `{_time()}`"
+    )
+
+
+def notify_eval_complete(dataset_name: str, pct: int, output_dir: str):
+    _send(
+        f"✅ *Evaluation Complete!*\n"
+        f">  *Dataset:* `{dataset_name}`\n"
+        f">  *Model:*   `groot{pct}`\n"
+        f">  *Results:* `{output_dir}`\n"
         f">  *Time:*    `{_time()}`"
     )

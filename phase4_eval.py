@@ -105,7 +105,7 @@ def generate_eval_sbatch(
     Path(SBATCH_DIR).mkdir(parents=True, exist_ok=True)
     Path(f"{RLWRLD_ISAAC_DIR}/slurm-logs").mkdir(parents=True, exist_ok=True)
 
-    sbatch_path    = f"{SBATCH_DIR}/eval_{job_name}.sh"
+    sbatch_path      = f"{SBATCH_DIR}/eval_{job_name}.sh"
     dist_labels_bash = " ".join(f'"{d}"' for d in DIST_LABELS)
 
     content = f"""#!/bin/bash
@@ -216,10 +216,25 @@ python ${{GR00T_ROOT}}/scripts/eval_allex.py \\
 EVAL_EXIT_CODE=$?
 set -e
 
+# ------------------------------------------------------------------
+# 6. Notify Result
+# ------------------------------------------------------------------
 if [ $EVAL_EXIT_CODE -eq 0 ]; then
   echo "EVAL SUCCESS: groot{pct} ${{CURRENT_DIST}}"
+  python3 -c "
+import sys
+sys.path.insert(0, '{GROOT_DIR}/automating_groot')
+from notify import notify_eval_complete
+notify_eval_complete('{dataset_name}', {pct}, '${{OUTPUT_DIR}}')
+"
 else
   echo "EVAL FAILED CODE $EVAL_EXIT_CODE: groot{pct} ${{CURRENT_DIST}}"
+  python3 -c "
+import sys
+sys.path.insert(0, '{GROOT_DIR}/automating_groot')
+from notify import notify_error
+notify_error('Phase 4 - Eval', '{dataset_name}_{pct}pct ${{CURRENT_DIST}}', 'Exit code: $EVAL_EXIT_CODE')
+"
 fi
 """
 
@@ -288,6 +303,10 @@ def submit_eval_jobs(
     for pct, info in eval_job_info.items():
         print(f"  groot{pct}  -> Job ID: {info['job_id']}  ({len(DIST_LABELS)} distances as array)")
     print(f"{'='*60}\n")
+
+    # ── Notify Slack: Eval Started ────────────────────────────────────
+    from notify import notify_eval_started
+    notify_eval_started(dataset_name, eval_job_info)
 
     return eval_job_info
 
