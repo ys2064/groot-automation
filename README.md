@@ -29,10 +29,9 @@ run_pipeline.py  ←  single entry point
        ├── Phase 1: phase1_split.py       → splits dataset into 10%, 50%, 100%
        ├── Phase 2: phase2_configs.py     → generates YAML training configs
        ├── Phase 3: phase3_train.py       → submits training jobs to SLURM
-       ├── Phase 4: phase4_checkpoints.py → monitors jobs, detects checkpoints  [coming]
-       ├── Phase 5: phase5_eval.py        → submits eval jobs to Isaac Sim       [coming]
-       ├── Phase 6: phase6_results.py     → parses results, calculates success   [coming]
-       └── Phase 7: phase7_leaderboard.py → pushes results to leaderboard        [coming]
+       ├── Phase 4: phase4_eval.py        
+       ├── Phase 5: phase5_results.py     → parses results, calculates success   [coming]
+       └── Phase 6: phase6_leaderboard.py → pushes results to leaderboard        [coming]
 ```
 
 ---
