@@ -52,7 +52,7 @@ def dataset_name_to_task_name(dataset_name: str) -> str:
     parts = dataset_name.split("_")
 
     for i in range(len(parts) - 1, 0, -1):
-        if re.match(r'^[0-9T]', parts[i]):
+        if re.match(r'^([0-9]|T[0-9])', parts[i]):
             base   = "_".join(parts[:i])
             suffix = "_".join(parts[i:])
             return f"task-{base}-{suffix}"
