@@ -36,7 +36,7 @@ IMAGE_CROP_RATIO = 1.0
 IMAGE_HEIGHT     = 224
 IMAGE_WIDTH      = 224
 DIST_LABELS      = ["0cm", "1cm", "3cm", "5cm", "7cm"]
-MODEL_PCTS       = [10, 50, 100]
+MODEL_PCTS       = [50, 100]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
