@@ -30,6 +30,9 @@ export TRANSFORMERS_ATTENTION_TYPES=eager
 export TRANSFORMERS_VERBOSITY=error
 export PYTHONUNBUFFERED=1
 
+source ~/.bashrc
+source /rlwrld1/home/yashu/rlwrld_isaac/.venv/bin/activate
+
 # ------------------------------------------------------------------
 # 1. Distance Array
 # ------------------------------------------------------------------
@@ -64,8 +67,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
-source ~/.bashrc
-source /rlwrld1/home/yashu/rlwrld_isaac/.venv/bin/activate
+# ------------------------------------------------------------------
+# ✅ Notify eval STARTED — fires only when node is Running (R)
+# ------------------------------------------------------------------
+python3 -c "
+import sys
+sys.path.insert(0, '/rlwrld1/home/yashu/rlwrld_isaac/gr00t/automating_groot')
+from notify import notify_eval_started
+notify_eval_started('Cylinder_Tube_Place_test', 100, '${CURRENT_DIST}')
+"
 
 # ------------------------------------------------------------------
 # 4. Launch Isaac Sim Server
@@ -82,8 +92,28 @@ python ${PROJECT_ROOT}/scripts/environments/server_v2.py \
   > "${PROJECT_ROOT}/slurm-logs/${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}_server.log" 2>&1 &
 allex_env_pid=$!
 
-echo "Waiting for Server on port ${ALLEX_ENV_PORT}..."
+# ── ✅ Wait for server with timeout — notify if it never starts ───────
+echo "Waiting for Isaac Sim Server on port ${ALLEX_ENV_PORT}..."
+set +e
 timeout 300s bash -c "until ss -tuln | grep -q \":${ALLEX_ENV_PORT} \"; do sleep 5; done"
+SERVER_WAIT_CODE=$?
+set -e
+
+if [ $SERVER_WAIT_CODE -ne 0 ]; then
+  echo "Isaac Sim Server did NOT start within 300s — aborting"
+  python3 -c "
+import sys
+sys.path.insert(0, '/rlwrld1/home/yashu/rlwrld_isaac/gr00t/automating_groot')
+from notify import notify_error
+notify_error(
+    'Phase 4 - Isaac Sim Server Timeout',
+    'Cylinder_Tube_Place_test_100pct ${CURRENT_DIST}',
+    'Server did not start on port ${ALLEX_ENV_PORT} within 300s. Check server log.'
+)
+"
+  exit 1
+fi
+
 sleep 10
 
 # ------------------------------------------------------------------
@@ -106,22 +136,41 @@ EVAL_EXIT_CODE=$?
 set -e
 
 # ------------------------------------------------------------------
-# 6. Notify Result
+# ✅ Verify 72 MP4s exist, then notify complete or error
 # ------------------------------------------------------------------
-if [ $EVAL_EXIT_CODE -eq 0 ]; then
-  echo "EVAL SUCCESS: groot100 ${CURRENT_DIST}"
-  python3 -c "
-import sys
+python3 -c "
+import sys, os, glob
 sys.path.insert(0, '/rlwrld1/home/yashu/rlwrld_isaac/gr00t/automating_groot')
-from notify import notify_eval_complete
-notify_eval_complete('Cylinder_Tube_Place_test', 100, '${OUTPUT_DIR}')
+from notify import notify_eval_complete, notify_error
+
+output_dir = '${OUTPUT_DIR}'
+dataset    = 'Cylinder_Tube_Place_test'
+pct        = 100
+dist       = '${CURRENT_DIST}'
+eval_exit  = $EVAL_EXIT_CODE
+expected   = 72
+
+# Step 1: Check eval exited cleanly
+if eval_exit != 0:
+    notify_error(
+        'Phase 4 - Evaluation Crashed',
+        f'{dataset}_{pct}pct {dist}',
+        f'eval_allex.py exited with code {eval_exit}'
+    )
+    sys.exit(1)
+
+# Step 2: Count MP4 files in output folder
+mp4_files = glob.glob(os.path.join(output_dir, '**', '*.mp4'), recursive=True)
+mp4_count = len(mp4_files)
+
+# Step 3: Notify based on count
+if mp4_count == expected:
+    notify_eval_complete(dataset, pct, dist, output_dir, mp4_count)
+else:
+    notify_error(
+        'Phase 4 - Missing Videos',
+        f'{dataset}_{pct}pct {dist}',
+        f'Expected {expected} MP4s but only found {mp4_count} in {output_dir}'
+    )
+    sys.exit(1)
 "
-else
-  echo "EVAL FAILED CODE $EVAL_EXIT_CODE: groot100 ${CURRENT_DIST}"
-  python3 -c "
-import sys
-sys.path.insert(0, '/rlwrld1/home/yashu/rlwrld_isaac/gr00t/automating_groot')
-from notify import notify_error
-notify_error('Phase 4 - Eval', 'Cylinder_Tube_Place_test_100pct ${CURRENT_DIST}', 'Exit code: $EVAL_EXIT_CODE')
-"
-fi

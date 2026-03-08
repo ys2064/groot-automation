@@ -116,16 +116,17 @@ def notify_error(phase: str, dataset_name: str, error: str):
 
 # ── Phase 4 Eval Notifications ────────────────────────────────────────
 
-def notify_eval_started(dataset_name: str, pct: int, dist: str):
+def notify_eval_all_started(dataset_name: str, job_ids: list, total_tasks: int):
     """
-    Called from INSIDE the sbatch script after env setup.
-    This means the node is actually Running (R), not Pending (PD).
+    Fired by eval_coordinator.py once ALL array tasks are Running (R).
+    One single notification instead of one per task.
     """
+    jobs_str = ", ".join([f"`{j}`" for j in job_ids])
     _send(
         f"🤖 *Phase 4: Evaluation Started*\n"
         f">  *Dataset:*  `{dataset_name}`\n"
-        f">  *Model:*    `groot{pct}`\n"
-        f">  *Distance:* `{dist}`\n"
+        f">  *Job IDs:*  {jobs_str}\n"
+        f">  *Tasks:*    `{total_tasks} nodes all Running ✅`\n"
         f">  *Time:*     `{_time()}`"
     )
 
@@ -144,3 +145,14 @@ def notify_eval_complete(dataset_name: str, pct: int, dist: str, output_dir: str
         f">  *Output:*   `{output_dir}`\n"
         f">  *Time:*     `{_time()}`"
     )
+```
+
+---
+
+Notice `notify_eval_started` (old per-task function) is **completely removed** and replaced with `notify_eval_all_started` (called once by the coordinator when all nodes are R).
+
+Now you have 3 files to update and 1 new file to create:
+```
+notify.py          ← paste this ✅
+phase4_eval.py     ← paste the version from previous message ✅
+eval_coordinator.py ← create this new file ✅ (from previous message)

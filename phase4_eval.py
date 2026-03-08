@@ -3,7 +3,7 @@ Phase 4 - Generate SBATCH Scripts and Submit Evaluation Jobs to SLURM
 
 Usage (standalone):
     python phase4_eval.py \
-        --dataset-name Cylinder_Tube_Place_T15cmC7cmLeft \
+        --dataset-name Cylinder_Tube_Place_test \
         --partition rlwrld
 
 Usage (from run_pipeline.py):
@@ -26,6 +26,7 @@ EVAL_OUTPUT_BASE = "/rlwrld1/home/yashu/output/eval"
 VENV             = "/rlwrld1/home/yashu/rlwrld_isaac/.venv/bin/activate"
 SBATCH_DIR       = "/rlwrld1/home/yashu/rlwrld_isaac/gr00t/automating_groot/sbatch_scripts"
 EVAL_TASKS_YAML  = "/rlwrld1/home/yashu/rlwrld_isaac/configs/eval_tasks.yaml"
+COORDINATOR      = "/rlwrld1/home/yashu/rlwrld_isaac/gr00t/automating_groot/eval_coordinator.py"
 
 # ── Fixed eval parameters ─────────────────────────────────────────────
 ISAAC_TASK       = "Isaac-UniPickPlace-ALLEX-JointAction-VisualStereo-Abs-v0"
@@ -99,7 +100,7 @@ def generate_eval_sbatch(
 #SBATCH --output={RLWRLD_ISAAC_DIR}/slurm-logs/%A_%a-{job_name}.out
 #SBATCH --error={RLWRLD_ISAAC_DIR}/slurm-logs/%A_%a-{job_name}.err
 #SBATCH --partition={partition}
-#SBATCH --qos=highprio
+#SBATCH --requeue
 #SBATCH --time=48:00:00
 #SBATCH --nodes=1
 #SBATCH --gpus=1
@@ -164,16 +165,6 @@ cleanup() {{
 trap cleanup EXIT
 
 # ------------------------------------------------------------------
-# ✅ Notify eval STARTED — fires only when node is Running (R)
-# ------------------------------------------------------------------
-python3 -c "
-import sys
-sys.path.insert(0, '{GROOT_DIR}/automating_groot')
-from notify import notify_eval_started
-notify_eval_started('{dataset_name}', {pct}, '${{CURRENT_DIST}}')
-"
-
-# ------------------------------------------------------------------
 # 4. Launch Isaac Sim Server
 # ------------------------------------------------------------------
 python ${{PROJECT_ROOT}}/scripts/environments/server_v2.py \\
@@ -188,7 +179,7 @@ python ${{PROJECT_ROOT}}/scripts/environments/server_v2.py \\
   > "${{PROJECT_ROOT}}/slurm-logs/${{SLURM_ARRAY_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}_server.log" 2>&1 &
 allex_env_pid=$!
 
-# ── ✅ Wait for server with timeout — notify if it never starts ───────
+# ── Wait for server with timeout — notify if it never starts ──────────
 echo "Waiting for Isaac Sim Server on port ${{ALLEX_ENV_PORT}}..."
 set +e
 timeout 300s bash -c "until ss -tuln | grep -q \\":${{ALLEX_ENV_PORT}} \\"; do sleep 5; done"
@@ -232,7 +223,7 @@ EVAL_EXIT_CODE=$?
 set -e
 
 # ------------------------------------------------------------------
-# ✅ Verify 72 MP4s exist, then notify complete or error
+# 6. Verify MP4s and notify complete or error
 # ------------------------------------------------------------------
 python3 -c "
 import sys, os, glob
@@ -246,7 +237,6 @@ dist       = '${{CURRENT_DIST}}'
 eval_exit  = $EVAL_EXIT_CODE
 expected   = {N_EPISODES}
 
-# Step 1: Check eval exited cleanly
 if eval_exit != 0:
     notify_error(
         'Phase 4 - Evaluation Crashed',
@@ -255,11 +245,9 @@ if eval_exit != 0:
     )
     sys.exit(1)
 
-# Step 2: Count MP4 files in output folder
 mp4_files = glob.glob(os.path.join(output_dir, '**', '*.mp4'), recursive=True)
 mp4_count = len(mp4_files)
 
-# Step 3: Notify based on count
 if mp4_count == expected:
     notify_eval_complete(dataset, pct, dist, output_dir, mp4_count)
 else:
@@ -290,6 +278,37 @@ def submit_job(sbatch_path: str) -> str:
     return job_id
 
 
+# ── Launch coordinator in background ─────────────────────────────────
+
+def launch_coordinator(dataset_name: str, job_ids: list):
+    """
+    Launch eval_coordinator.py as a background process on the login node.
+    It watches SLURM and fires ONE notification when all tasks are Running.
+    """
+    total_tasks = len(job_ids) * len(DIST_LABELS)
+    job_ids_str = ",".join(job_ids)
+
+    cmd = [
+        "python3", COORDINATOR,
+        "--dataset-name",  dataset_name,
+        "--job-ids",       job_ids_str,
+        "--total-tasks",   str(total_tasks),
+        "--poll-interval", "30"
+    ]
+
+    # Launch as detached background process — won't block or die when terminal closes
+    process = subprocess.Popen(
+        cmd,
+        stdout = open(f"/tmp/coordinator_{dataset_name}.log", "w"),
+        stderr = subprocess.STDOUT,
+        start_new_session = True   # detach from current session
+    )
+
+    print(f"[Phase 4] Coordinator launched (PID {process.pid})")
+    print(f"[Phase 4] Watching {total_tasks} tasks across jobs: {job_ids_str}")
+    print(f"[Phase 4] Coordinator log: /tmp/coordinator_{dataset_name}.log")
+
+
 # ── Main function ─────────────────────────────────────────────────────
 
 def submit_eval_jobs(
@@ -312,6 +331,7 @@ def submit_eval_jobs(
     print(f"[Phase 4] Instruction: {instruction}\n")
 
     eval_job_info = {}
+    submitted_job_ids = []
 
     for pct in MODEL_PCTS:
         checkpoint  = get_checkpoint_path(dataset_name, pct)
@@ -324,6 +344,7 @@ def submit_eval_jobs(
             partition    = partition
         )
         job_id = submit_job(sbatch_path)
+        submitted_job_ids.append(job_id)
         eval_job_info[pct] = {
             "job_id"      : job_id,
             "sbatch_path" : sbatch_path,
@@ -338,7 +359,8 @@ def submit_eval_jobs(
         print(f"  groot{pct}  -> Job ID: {info['job_id']}  ({len(DIST_LABELS)} distances as array)")
     print(f"{'='*60}\n")
 
-    # Notification now fires from inside sbatch when node is Running (R)
+    # ── Launch coordinator to watch for all tasks Running ─────────────
+    launch_coordinator(dataset_name, submitted_job_ids)
 
     return eval_job_info
 
@@ -347,10 +369,9 @@ def submit_eval_jobs(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Phase 4: Submit evaluation jobs")
-    parser.add_argument("--dataset-name", required=True,
-                        help="e.g. Cylinder_Tube_Place_T15cmC7cmLeft")
-    parser.add_argument("--partition", default="rlwrld")
-    parser.add_argument("--task-name", default=None)
+    parser.add_argument("--dataset-name", required=True)
+    parser.add_argument("--partition",    default="rlwrld")
+    parser.add_argument("--task-name",    default=None)
     args = parser.parse_args()
 
     submit_eval_jobs(
