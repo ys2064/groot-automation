@@ -11,6 +11,7 @@ Usage (from anywhere):
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 # ── Make imports work from ANY directory ──────────────────────────────
@@ -22,7 +23,7 @@ sys.path.insert(0, str(PIPELINE_DIR))
 from phase1_split   import split_dataset
 from phase2_configs import generate_yaml_configs
 from phase3_train   import submit_training_jobs
-from phase4_eval    import submit_eval_jobs          # ← NEW
+from phase4_eval    import submit_eval_jobs, MODEL_PCTS, TRAIN_OUTPUT_BASE
 
 # Import notifications
 from notify import (
@@ -34,11 +35,42 @@ from notify import (
     notify_error,
 )
 
+# How often to check for checkpoints (seconds)
+CHECKPOINT_POLL_INTERVAL = 120  # 2 minutes
+CHECKPOINT_STEP          = 30000
+
+
+def wait_for_checkpoints(dataset_name: str, pcts: list, poll_interval: int = CHECKPOINT_POLL_INTERVAL):
+    """
+    Block until checkpoint-30000 exists for all MODEL_PCTS.
+    Polls every poll_interval seconds.
+    """
+    print(f"\n[Pipeline] Waiting for training checkpoints...")
+    print(f"[Pipeline] Checking every {poll_interval}s — this will take several hours\n")
+
+    while True:
+        all_ready = True
+        for pct in pcts:
+            ckpt = Path(f"{TRAIN_OUTPUT_BASE}/{dataset_name}_{pct}pct/checkpoint-{CHECKPOINT_STEP}")
+            if ckpt.exists():
+                print(f"[Pipeline] ✅ checkpoint found: groot{pct} -> {ckpt}")
+            else:
+                print(f"[Pipeline] ⏳ waiting:          groot{pct} -> {ckpt}")
+                all_ready = False
+
+        if all_ready:
+            print(f"\n[Pipeline] All checkpoints ready — proceeding to Phase 4!\n")
+            break
+
+        print(f"[Pipeline] Not ready yet — sleeping {poll_interval}s...\n")
+        time.sleep(poll_interval)
+
 
 def run_pipeline(
-    dataset_path: str,
-    dataset_name: str,
-    partition:    str = "rlwrld"
+    dataset_path:       str,
+    dataset_name:       str,
+    partition:          str = "rlwrld",
+    task_name_override: str = None,
 ) -> dict:
 
     print(f"\n###########################################################")
@@ -89,30 +121,38 @@ def run_pipeline(
 
     notify_training_in_progress(dataset_name, job_info)
 
-    # ── Phase 4 - Submit Eval Jobs ────────────────────────────────────  ← NEW
-    try:                                                                 # ← NEW
-        print(">>> PHASE 4: Submitting evaluation jobs to SLURM...")    # ← NEW
-        eval_job_info = submit_eval_jobs(                               # ← NEW
-            dataset_name = dataset_name,                                # ← NEW
-            partition    = partition                                     # ← NEW
-        )                                                               # ← NEW
-    except Exception as e:                                              # ← NEW
-        notify_error("Phase 4 - Eval Submit", dataset_name, str(e))    # ← NEW
-        raise                                                           # ← NEW
+    # ── Wait for checkpoints before Phase 4 ───────────────────────────
+    try:
+        wait_for_checkpoints(dataset_name, MODEL_PCTS)
+    except Exception as e:
+        notify_error("Phase 4 - Checkpoint Wait", dataset_name, str(e))
+        raise
 
-    # ── Summary ───────────────────────────────────────���───────────────
+    # ── Phase 4 - Submit Eval Jobs ────────────────────────────────────
+    try:
+        print(">>> PHASE 4: Submitting evaluation jobs to SLURM...")
+        eval_job_info = submit_eval_jobs(
+            dataset_name       = dataset_name,
+            partition          = partition,
+            task_name_override = task_name_override,
+        )
+    except Exception as e:
+        notify_error("Phase 4 - Eval Submit", dataset_name, str(e))
+        raise
+
+    # ── Summary ───────────────────────────────────────────────────────
     print(f"\n###########################################################")
     print(f"# PIPELINE COMPLETE!")
     print(f"# Training jobs:")
     for pct, info in job_info.items():
         print(f"#   {pct}%  -> Job ID: {info['job_id']}")
     print(f"#")
-    print(f"# Eval jobs:")                                              # ← NEW
-    for pct, info in eval_job_info.items():                            # ← NEW
-        print(f"#   groot{pct}  -> Job ID: {info['job_id']}")         # ← NEW
+    print(f"# Eval jobs:")
+    for pct, info in eval_job_info.items():
+        print(f"#   groot{pct}  -> Job ID: {info['job_id']}")
     print(f"###########################################################\n")
 
-    return {"training": job_info, "eval": eval_job_info}               # ← NEW
+    return {"training": job_info, "eval": eval_job_info}
 
 
 if __name__ == "__main__":
@@ -122,14 +162,28 @@ if __name__ == "__main__":
     )
     parser.add_argument("--dataset-path", required=True)
     parser.add_argument("--dataset-name", required=True)
-    parser.add_argument("--partition", default="rlwrld")
+    parser.add_argument("--partition",    default="rlwrld")
+    parser.add_argument("--task-name",    default=None)
 
     args = parser.parse_args()
 
     run_pipeline(
-        dataset_path = args.dataset_path,
-        dataset_name = args.dataset_name,
-        partition    = args.partition
+        dataset_path       = args.dataset_path,
+        dataset_name       = args.dataset_name,
+        partition          = args.partition,
+        task_name_override = args.task_name,
     )
 
     sys.exit(0)
+
+
+#The key change is `wait_for_checkpoints()` which polls every 2 minutes until `checkpoint-30000` exists for both `groot50` and `groot100` before Phase 4 runs. The terminal will show:
+#[Pipeline] ⏳ waiting: groot50  -> /rlwrld1/.../Cube_Stack-3cmRight_50pct/checkpoint-30000
+#[Pipeline] ⏳ waiting: groot100 -> /rlwrld1/.../Cube_Stack-3cmRight_100pct/checkpoint-30000
+#[Pipeline] Not ready yet — sleeping 120s...
+
+#... several hours later ...
+
+#[Pipeline] ✅ checkpoint found: groot50
+#[Pipeline] ✅ checkpoint found: groot100
+#[Pipeline] All checkpoints ready — proceeding to Phase 4!
