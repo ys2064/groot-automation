@@ -100,7 +100,6 @@ def generate_eval_sbatch(
 #SBATCH --output={RLWRLD_ISAAC_DIR}/slurm-logs/%A_%a-{job_name}.out
 #SBATCH --error={RLWRLD_ISAAC_DIR}/slurm-logs/%A_%a-{job_name}.err
 #SBATCH --partition={partition}
-#SBATCH --qos=highprio
 #SBATCH --requeue
 #SBATCH --time=48:00:00
 #SBATCH --nodes=1
