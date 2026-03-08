@@ -43,13 +43,13 @@ MODEL_PCTS       = [50, 100]
 # Helpers
 
 def dataset_name_to_task_name(dataset_name: str) -> str:
-    parts = dataset_name.split("_")
-    for i in range(len(parts) - 1, 0, -1):
-        if re.match(r'^([0-9]|T[0-9])', parts[i]):
-            base   = "_".join(parts[:i])
-            suffix = "_".join(parts[i:])
-            return f"task-{base}-{suffix}"
-    return f"task-{dataset_name.replace('_', '-')}"
+    match = re.search(r'[-_](\d+cm\w*)', dataset_name)
+    if match:
+        split_idx = match.start()
+        base      = dataset_name[:split_idx]
+        suffix    = dataset_name[split_idx+1:]
+        return f"task-{base}-{suffix}"
+    return f"task-{base}-{suffix}"
 
 
 def get_instruction(task_name: str) -> str:
