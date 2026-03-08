@@ -4,7 +4,7 @@
 
 Automates the full GR00T N1.5 model training workflow — from raw dataset to SLURM training jobs — with a single command.
 
-> **Status:** Phases 1–3 complete and tested. Phases 4–7 in development.
+> **Status:** Phases 1–4 complete and tested. Phases 5–7 in development.
 
 ---
 
