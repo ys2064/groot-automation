@@ -3,7 +3,7 @@
 #SBATCH --output=/rlwrld1/home/yashu/rlwrld_isaac/slurm-logs/%A_%a-eval_Cylinder_Tube_Place_test_50pct.out
 #SBATCH --error=/rlwrld1/home/yashu/rlwrld_isaac/slurm-logs/%A_%a-eval_Cylinder_Tube_Place_test_50pct.err
 #SBATCH --partition=rlwrld
-#SBATCH --qos=highprio
+#SBATCH --requeue
 #SBATCH --time=48:00:00
 #SBATCH --nodes=1
 #SBATCH --gpus=1
@@ -60,22 +60,12 @@ find_available_port() {
 ALLEX_ENV_PORT=$(find_available_port)
 
 cleanup() {
-  echo "Cleaning up port ${ALLEX_ENV_PORT}..."
+  echo "[cleanup] Triggered — killing Isaac Sim server..."
   kill -9 ${allex_env_pid} 2>/dev/null || true
   fuser -k ${ALLEX_ENV_PORT}/tcp 2>/dev/null || true
   sleep 2
 }
 trap cleanup EXIT
-
-# ------------------------------------------------------------------
-# ✅ Notify eval STARTED — fires only when node is Running (R)
-# ------------------------------------------------------------------
-python3 -c "
-import sys
-sys.path.insert(0, '/rlwrld1/home/yashu/rlwrld_isaac/gr00t/automating_groot')
-from notify import notify_eval_started
-notify_eval_started('Cylinder_Tube_Place_test', 50, '${CURRENT_DIST}')
-"
 
 # ------------------------------------------------------------------
 # 4. Launch Isaac Sim Server
@@ -92,7 +82,7 @@ python ${PROJECT_ROOT}/scripts/environments/server_v2.py \
   > "${PROJECT_ROOT}/slurm-logs/${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}_server.log" 2>&1 &
 allex_env_pid=$!
 
-# ── ✅ Wait for server with timeout — notify if it never starts ───────
+# Wait for server with timeout
 echo "Waiting for Isaac Sim Server on port ${ALLEX_ENV_PORT}..."
 set +e
 timeout 300s bash -c "until ss -tuln | grep -q \":${ALLEX_ENV_PORT} \"; do sleep 5; done"
@@ -117,11 +107,13 @@ fi
 sleep 10
 
 # ------------------------------------------------------------------
-# 5. Launch Evaluation
+# 5. Launch Evaluation + MP4 Watcher
 # ------------------------------------------------------------------
 echo "Starting Eval: groot50 at ${CURRENT_DIST}"
 
 set +e
+
+# Launch eval_allex.py in BACKGROUND
 python ${GR00T_ROOT}/scripts/eval_allex.py \
   --model-path "/rlwrld1/home/yashu/output/train/Cylinder_Tube_Place_test_50pct/checkpoint-30000" \
   --server-port "${ALLEX_ENV_PORT}" \
@@ -130,13 +122,62 @@ python ${GR00T_ROOT}/scripts/eval_allex.py \
   --n-episodes 72 \
   --save-data \
   --data_config allex_thetwo_ck40_egostereo \
-  --action_type joint_action
+  --action_type joint_action &
 
-EVAL_EXIT_CODE=$?
+EVAL_PID=$!
+echo "[eval] eval_allex.py started with PID $EVAL_PID"
+
+# MP4 Watcher runs in FOREGROUND
+# Checks every 30s — kills eval once all 72 MP4s are saved
+python3 -c "
+import os, glob, time, signal, sys
+
+output_dir     = '${OUTPUT_DIR}'
+expected       = 72
+eval_pid       = $EVAL_PID
+check_interval = 30
+
+print(f'[mp4_watcher] Watching for {expected} MP4s in {output_dir}', flush=True)
+
+while True:
+    time.sleep(check_interval)
+
+    # Check if eval already finished on its own
+    try:
+        os.kill(eval_pid, 0)
+    except ProcessLookupError:
+        print('[mp4_watcher] eval_allex.py already exited on its own', flush=True)
+        break
+
+    # Count MP4s
+    mp4_files = glob.glob(os.path.join(output_dir, '**', '*.mp4'), recursive=True)
+    mp4_count = len(mp4_files)
+    print(f'[mp4_watcher] {mp4_count} / {expected} MP4s saved', flush=True)
+
+    if mp4_count >= expected:
+        print(f'[mp4_watcher] All {expected} MP4s saved — stopping eval_allex.py (PID {eval_pid})', flush=True)
+        try:
+            os.kill(eval_pid, signal.SIGTERM)
+            time.sleep(5)
+            try:
+                os.kill(eval_pid, 0)
+                os.kill(eval_pid, signal.SIGKILL)
+                print('[mp4_watcher] Force killed eval_allex.py', flush=True)
+            except ProcessLookupError:
+                print('[mp4_watcher] eval_allex.py exited cleanly after SIGTERM', flush=True)
+        except ProcessLookupError:
+            print('[mp4_watcher] eval_allex.py already gone', flush=True)
+        break
+
+print('[mp4_watcher] Done', flush=True)
+"
+
+# Wait for eval process to fully exit
+wait $EVAL_PID 2>/dev/null || true
 set -e
 
 # ------------------------------------------------------------------
-# ✅ Verify 72 MP4s exist, then notify complete or error
+# 6. Verify MP4s and notify complete or error
 # ------------------------------------------------------------------
 python3 -c "
 import sys, os, glob
@@ -147,24 +188,14 @@ output_dir = '${OUTPUT_DIR}'
 dataset    = 'Cylinder_Tube_Place_test'
 pct        = 50
 dist       = '${CURRENT_DIST}'
-eval_exit  = $EVAL_EXIT_CODE
 expected   = 72
 
-# Step 1: Check eval exited cleanly
-if eval_exit != 0:
-    notify_error(
-        'Phase 4 - Evaluation Crashed',
-        f'{dataset}_{pct}pct {dist}',
-        f'eval_allex.py exited with code {eval_exit}'
-    )
-    sys.exit(1)
-
-# Step 2: Count MP4 files in output folder
 mp4_files = glob.glob(os.path.join(output_dir, '**', '*.mp4'), recursive=True)
 mp4_count = len(mp4_files)
 
-# Step 3: Notify based on count
-if mp4_count == expected:
+print(f'[verify] {mp4_count} / {expected} MP4s found', flush=True)
+
+if mp4_count >= expected:
     notify_eval_complete(dataset, pct, dist, output_dir, mp4_count)
 else:
     notify_error(
