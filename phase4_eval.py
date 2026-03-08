@@ -18,7 +18,7 @@ import yaml
 from pathlib import Path
 
 
-# ── Fixed paths (do not change) ───────────────────────────────────────
+# Fixed paths (do not change)
 GROOT_DIR        = "/rlwrld1/home/yashu/rlwrld_isaac/gr00t"
 RLWRLD_ISAAC_DIR = "/rlwrld1/home/yashu/rlwrld_isaac"
 TRAIN_OUTPUT_BASE= "/rlwrld1/home/yashu/output/train"
@@ -28,7 +28,7 @@ SBATCH_DIR       = "/rlwrld1/home/yashu/rlwrld_isaac/gr00t/automating_groot/sbat
 EVAL_TASKS_YAML  = "/rlwrld1/home/yashu/rlwrld_isaac/configs/eval_tasks.yaml"
 COORDINATOR      = "/rlwrld1/home/yashu/rlwrld_isaac/gr00t/automating_groot/eval_coordinator.py"
 
-# ── Fixed eval parameters ─────────────────────────────────────────────
+# Fixed eval parameters
 ISAAC_TASK       = "Isaac-UniPickPlace-ALLEX-JointAction-VisualStereo-Abs-v0"
 DATA_CONFIG      = "allex_thetwo_ck40_egostereo"
 ACTION_TYPE      = "joint_action"
@@ -40,7 +40,7 @@ DIST_LABELS      = ["0cm", "1cm", "3cm", "5cm", "7cm"]
 MODEL_PCTS       = [50, 100]
 
 
-# ── Helpers ───────────────────────────────────────────────────────────
+# Helpers
 
 def dataset_name_to_task_name(dataset_name: str) -> str:
     parts = dataset_name.split("_")
@@ -74,7 +74,7 @@ def get_checkpoint_path(dataset_name: str, pct: int) -> str:
     return ckpt
 
 
-# ── SBATCH Generator ──────────────────────────────────────────────────
+# SBATCH Generator
 
 def generate_eval_sbatch(
     dataset_name: str,
@@ -100,6 +100,7 @@ def generate_eval_sbatch(
 #SBATCH --output={RLWRLD_ISAAC_DIR}/slurm-logs/%A_%a-{job_name}.out
 #SBATCH --error={RLWRLD_ISAAC_DIR}/slurm-logs/%A_%a-{job_name}.err
 #SBATCH --partition={partition}
+#SBATCH --qos=highprio
 #SBATCH --requeue
 #SBATCH --time=48:00:00
 #SBATCH --nodes=1
@@ -179,7 +180,7 @@ python ${{PROJECT_ROOT}}/scripts/environments/server_v2.py \\
   > "${{PROJECT_ROOT}}/slurm-logs/${{SLURM_ARRAY_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}_server.log" 2>&1 &
 allex_env_pid=$!
 
-# ── Wait for server with timeout — notify if it never starts ──────────
+# Wait for server with timeout
 echo "Waiting for Isaac Sim Server on port ${{ALLEX_ENV_PORT}}..."
 set +e
 timeout 300s bash -c "until ss -tuln | grep -q \\":${{ALLEX_ENV_PORT}} \\"; do sleep 5; done"
@@ -265,7 +266,7 @@ else:
     return sbatch_path
 
 
-# ── Submit ────────────────────────────────────────────────────────────
+# Submit
 
 def submit_job(sbatch_path: str) -> str:
     result = subprocess.run(["sbatch", sbatch_path], capture_output=True, text=True)
@@ -278,30 +279,31 @@ def submit_job(sbatch_path: str) -> str:
     return job_id
 
 
-# ── Launch coordinator in background ─────────────────────────────────
+# Launch coordinator in background
 
-def launch_coordinator(dataset_name: str, job_ids: list):
+def launch_coordinator(dataset_name: str, job_ids: list, eval_job_info: dict):
     """
     Launch eval_coordinator.py as a background process on the login node.
-    It watches SLURM and fires ONE notification when all tasks are Running.
+    Watches SLURM and fires ONE notification when all tasks are Running.
     """
     total_tasks = len(job_ids) * len(DIST_LABELS)
     job_ids_str = ",".join(job_ids)
+    job_map_str = ",".join([f"{pct}:{info['job_id']}" for pct, info in eval_job_info.items()])
 
     cmd = [
         "python3", COORDINATOR,
         "--dataset-name",  dataset_name,
         "--job-ids",       job_ids_str,
+        "--job-map",       job_map_str,
         "--total-tasks",   str(total_tasks),
         "--poll-interval", "30"
     ]
 
-    # Launch as detached background process — won't block or die when terminal closes
     process = subprocess.Popen(
         cmd,
-        stdout = open(f"/tmp/coordinator_{dataset_name}.log", "w"),
-        stderr = subprocess.STDOUT,
-        start_new_session = True   # detach from current session
+        stdout            = open(f"/tmp/coordinator_{dataset_name}.log", "w"),
+        stderr            = subprocess.STDOUT,
+        start_new_session = True
     )
 
     print(f"[Phase 4] Coordinator launched (PID {process.pid})")
@@ -309,7 +311,7 @@ def launch_coordinator(dataset_name: str, job_ids: list):
     print(f"[Phase 4] Coordinator log: /tmp/coordinator_{dataset_name}.log")
 
 
-# ── Main function ─────────────────────────────────────────────────────
+# Main function
 
 def submit_eval_jobs(
     dataset_name: str,
@@ -330,8 +332,8 @@ def submit_eval_jobs(
     print(f"[Phase 4] Task name  : {task_name}")
     print(f"[Phase 4] Instruction: {instruction}\n")
 
-    eval_job_info = {}
-    submitted_job_ids = []
+    eval_job_info      = {}
+    submitted_job_ids  = []
 
     for pct in MODEL_PCTS:
         checkpoint  = get_checkpoint_path(dataset_name, pct)
@@ -354,18 +356,18 @@ def submit_eval_jobs(
         }
 
     print(f"\n{'='*60}")
-    print(f"[Phase 4] ✅ All eval jobs submitted!")
+    print(f"[Phase 4] All eval jobs submitted!")
     for pct, info in eval_job_info.items():
         print(f"  groot{pct}  -> Job ID: {info['job_id']}  ({len(DIST_LABELS)} distances as array)")
     print(f"{'='*60}\n")
 
-    # ── Launch coordinator to watch for all tasks Running ─────────────
-    launch_coordinator(dataset_name, submitted_job_ids)
+    # Launch coordinator to watch for all tasks Running
+    launch_coordinator(dataset_name, submitted_job_ids, eval_job_info)
 
     return eval_job_info
 
 
-# ── CLI entry point ───────────────────────────────────────────────────
+# CLI entry point
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Phase 4: Submit evaluation jobs")

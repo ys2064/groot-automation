@@ -7,7 +7,6 @@ import os
 import requests
 from datetime import datetime
 
-# Slack Webhook URL loaded from environment
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "")
 
 
@@ -115,17 +114,19 @@ def notify_error(phase: str, dataset_name: str, error: str):
 
 # Phase 4 Eval Notifications
 
-def notify_eval_all_started(dataset_name: str, job_ids: list, total_tasks: int):
+def notify_eval_all_started(dataset_name: str, eval_job_info: dict):
     """
     Fired by eval_coordinator.py once ALL array tasks are Running (R).
     One single notification instead of one per task.
     """
-    jobs_str = ", ".join([f"`{j}`" for j in job_ids])
+    lines = "\n".join([
+        f">  `groot{pct}` -> Job ID: `{info['job_id']}`"
+        for pct, info in eval_job_info.items()
+    ])
     _send(
         f"🤖 *Phase 4: Evaluation Started*\n"
         f">  *Dataset:*  `{dataset_name}`\n"
-        f">  *Job IDs:*  {jobs_str}\n"
-        f">  *Tasks:*    `{total_tasks} nodes all Running`\n"
+        f"{lines}\n"
         f">  *Time:*     `{_time()}`"
     )
 
