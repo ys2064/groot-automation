@@ -157,7 +157,7 @@ find_available_port() {{
 ALLEX_ENV_PORT=$(find_available_port)
 
 cleanup() {{
-  echo "Cleaning up port ${{ALLEX_ENV_PORT}}..."
+  echo "[cleanup] Triggered — killing Isaac Sim server..."
   kill -9 ${{allex_env_pid}} 2>/dev/null || true
   fuser -k ${{ALLEX_ENV_PORT}}/tcp 2>/dev/null || true
   sleep 2
@@ -204,11 +204,13 @@ fi
 sleep 10
 
 # ------------------------------------------------------------------
-# 5. Launch Evaluation
+# 5. Launch Evaluation + MP4 Watcher
 # ------------------------------------------------------------------
 echo "Starting Eval: groot{pct} at ${{CURRENT_DIST}}"
 
 set +e
+
+# Launch eval_allex.py in BACKGROUND
 python ${{GR00T_ROOT}}/scripts/eval_allex.py \\
   --model-path "{checkpoint}" \\
   --server-port "${{ALLEX_ENV_PORT}}" \\
@@ -217,9 +219,58 @@ python ${{GR00T_ROOT}}/scripts/eval_allex.py \\
   --n-episodes {N_EPISODES} \\
   --save-data \\
   --data_config {DATA_CONFIG} \\
-  --action_type {ACTION_TYPE}
+  --action_type {ACTION_TYPE} &
 
-EVAL_EXIT_CODE=$?
+EVAL_PID=$!
+echo "[eval] eval_allex.py started with PID $EVAL_PID"
+
+# MP4 Watcher runs in FOREGROUND
+# Checks every 30s — kills eval once all 72 MP4s are saved
+python3 -c "
+import os, glob, time, signal, sys
+
+output_dir     = '${{OUTPUT_DIR}}'
+expected       = {N_EPISODES}
+eval_pid       = $EVAL_PID
+check_interval = 30
+
+print(f'[mp4_watcher] Watching for {{expected}} MP4s in {{output_dir}}', flush=True)
+
+while True:
+    time.sleep(check_interval)
+
+    # Check if eval already finished on its own
+    try:
+        os.kill(eval_pid, 0)
+    except ProcessLookupError:
+        print('[mp4_watcher] eval_allex.py already exited on its own', flush=True)
+        break
+
+    # Count MP4s
+    mp4_files = glob.glob(os.path.join(output_dir, '**', '*.mp4'), recursive=True)
+    mp4_count = len(mp4_files)
+    print(f'[mp4_watcher] {{mp4_count}} / {{expected}} MP4s saved', flush=True)
+
+    if mp4_count >= expected:
+        print(f'[mp4_watcher] All {{expected}} MP4s saved — stopping eval_allex.py (PID {{eval_pid}})', flush=True)
+        try:
+            os.kill(eval_pid, signal.SIGTERM)
+            time.sleep(5)
+            try:
+                os.kill(eval_pid, 0)
+                os.kill(eval_pid, signal.SIGKILL)
+                print('[mp4_watcher] Force killed eval_allex.py', flush=True)
+            except ProcessLookupError:
+                print('[mp4_watcher] eval_allex.py exited cleanly after SIGTERM', flush=True)
+        except ProcessLookupError:
+            print('[mp4_watcher] eval_allex.py already gone', flush=True)
+        break
+
+print('[mp4_watcher] Done', flush=True)
+"
+
+# Wait for eval process to fully exit
+wait $EVAL_PID 2>/dev/null || true
 set -e
 
 # ------------------------------------------------------------------
@@ -234,21 +285,14 @@ output_dir = '${{OUTPUT_DIR}}'
 dataset    = '{dataset_name}'
 pct        = {pct}
 dist       = '${{CURRENT_DIST}}'
-eval_exit  = $EVAL_EXIT_CODE
 expected   = {N_EPISODES}
-
-if eval_exit != 0:
-    notify_error(
-        'Phase 4 - Evaluation Crashed',
-        f'{{dataset}}_{{pct}}pct {{dist}}',
-        f'eval_allex.py exited with code {{eval_exit}}'
-    )
-    sys.exit(1)
 
 mp4_files = glob.glob(os.path.join(output_dir, '**', '*.mp4'), recursive=True)
 mp4_count = len(mp4_files)
 
-if mp4_count == expected:
+print(f'[verify] {{mp4_count}} / {{expected}} MP4s found', flush=True)
+
+if mp4_count >= expected:
     notify_eval_complete(dataset, pct, dist, output_dir, mp4_count)
 else:
     notify_error(
@@ -331,8 +375,8 @@ def submit_eval_jobs(
     print(f"[Phase 4] Task name  : {task_name}")
     print(f"[Phase 4] Instruction: {instruction}\n")
 
-    eval_job_info      = {}
-    submitted_job_ids  = []
+    eval_job_info     = {}
+    submitted_job_ids = []
 
     for pct in MODEL_PCTS:
         checkpoint  = get_checkpoint_path(dataset_name, pct)
