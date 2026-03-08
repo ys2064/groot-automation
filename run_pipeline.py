@@ -1,17 +1,17 @@
 """
 run_pipeline.py - Master Script
-Runs Phase 1, 2, 3 and 4 automatically with one command.
+Runs Phase 1, 2, 3 and launches Phase 4 watcher in background.
 
-Usage (from anywhere):
-    python3 /rlwrld1/home/yashu/rlwrld_isaac/gr00t/automating_groot/run_pipeline.py \
-        --dataset-path /rlwrld-dataset/.../37-Cube_Box_Box-5cmRight-9029bbfd \
-        --dataset-name Cube_Box_Box_5cmRight \
+Usage:
+    python run_pipeline.py \
+        --dataset-path /rlwrld-dataset/.../3-Cube_Stack-3cmRight-045004d9 \
+        --dataset-name Cube_Stack-3cmRight \
         --partition rlwrld
 """
 
 import argparse
 import sys
-import time
+import subprocess
 from pathlib import Path
 
 # ── Make imports work from ANY directory ──────────────────────────────
@@ -19,13 +19,10 @@ PIPELINE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(PIPELINE_DIR))
 # ──────────────────────────────────────────────────────────────────────
 
-# Import all phases
 from phase1_split   import split_dataset
 from phase2_configs import generate_yaml_configs
 from phase3_train   import submit_training_jobs
-from phase4_eval    import submit_eval_jobs, MODEL_PCTS, TRAIN_OUTPUT_BASE
 
-# Import notifications
 from notify import (
     notify_pipeline_start,
     notify_phase1_done,
@@ -35,35 +32,36 @@ from notify import (
     notify_error,
 )
 
-# How often to check for checkpoints (seconds)
-CHECKPOINT_POLL_INTERVAL = 120  # 2 minutes
-CHECKPOINT_STEP          = 30000
+WATCHER_SCRIPT = str(PIPELINE_DIR / "phase4_watcher.py")
 
 
-def wait_for_checkpoints(dataset_name: str, pcts: list, poll_interval: int = CHECKPOINT_POLL_INTERVAL):
+def launch_phase4_watcher(dataset_name: str, partition: str, task_name: str = None):
     """
-    Block until checkpoint-30000 exists for all MODEL_PCTS.
-    Polls every poll_interval seconds.
+    Launch phase4_watcher.py as a fully detached background process.
+    Safe to close terminal after this.
     """
-    print(f"\n[Pipeline] Waiting for training checkpoints...")
-    print(f"[Pipeline] Checking every {poll_interval}s — this will take several hours\n")
+    cmd = [
+        "python3", WATCHER_SCRIPT,
+        "--dataset-name",  dataset_name,
+        "--partition",     partition,
+        "--poll-interval", "120",
+    ]
+    if task_name:
+        cmd += ["--task-name", task_name]
 
-    while True:
-        all_ready = True
-        for pct in pcts:
-            ckpt = Path(f"{TRAIN_OUTPUT_BASE}/{dataset_name}_{pct}pct/checkpoint-{CHECKPOINT_STEP}")
-            if ckpt.exists():
-                print(f"[Pipeline] ✅ checkpoint found: groot{pct} -> {ckpt}")
-            else:
-                print(f"[Pipeline] ⏳ waiting:          groot{pct} -> {ckpt}")
-                all_ready = False
+    log_path = f"/tmp/phase4_watcher_{dataset_name}.log"
 
-        if all_ready:
-            print(f"\n[Pipeline] All checkpoints ready — proceeding to Phase 4!\n")
-            break
+    process = subprocess.Popen(
+        cmd,
+        stdout            = open(log_path, "w"),
+        stderr            = subprocess.STDOUT,
+        start_new_session = True   # fully detached from terminal
+    )
 
-        print(f"[Pipeline] Not ready yet — sleeping {poll_interval}s...\n")
-        time.sleep(poll_interval)
+    print(f"\n[Pipeline] Phase 4 watcher launched in background (PID {process.pid})")
+    print(f"[Pipeline] Will auto-submit eval once checkpoints are ready")
+    print(f"[Pipeline] Watcher log: {log_path}")
+    print(f"[Pipeline] Safe to close terminal — Slack will notify you!\n")
 
 
 def run_pipeline(
@@ -121,38 +119,22 @@ def run_pipeline(
 
     notify_training_in_progress(dataset_name, job_info)
 
-    # ── Wait for checkpoints before Phase 4 ───────────────────────────
-    try:
-        wait_for_checkpoints(dataset_name, MODEL_PCTS)
-    except Exception as e:
-        notify_error("Phase 4 - Checkpoint Wait", dataset_name, str(e))
-        raise
-
-    # ── Phase 4 - Submit Eval Jobs ────────────────────────────────────
-    try:
-        print(">>> PHASE 4: Submitting evaluation jobs to SLURM...")
-        eval_job_info = submit_eval_jobs(
-            dataset_name       = dataset_name,
-            partition          = partition,
-            task_name_override = task_name_override,
-        )
-    except Exception as e:
-        notify_error("Phase 4 - Eval Submit", dataset_name, str(e))
-        raise
+    # ── Launch Phase 4 Watcher in Background ──────────────────────────
+    launch_phase4_watcher(dataset_name, partition, task_name_override)
 
     # ── Summary ───────────────────────────────────────────────────────
     print(f"\n###########################################################")
-    print(f"# PIPELINE COMPLETE!")
-    print(f"# Training jobs:")
+    print(f"# PIPELINE SUBMITTED!")
+    print(f"# Training jobs running on SLURM:")
     for pct, info in job_info.items():
         print(f"#   {pct}%  -> Job ID: {info['job_id']}")
     print(f"#")
-    print(f"# Eval jobs:")
-    for pct, info in eval_job_info.items():
-        print(f"#   groot{pct}  -> Job ID: {info['job_id']}")
+    print(f"# Phase 4 watcher running in background")
+    print(f"# Will auto-submit eval after checkpoint-30000 is ready")
+    print(f"# You will be notified on Slack at every step!")
     print(f"###########################################################\n")
 
-    return {"training": job_info, "eval": eval_job_info}
+    return {"training": job_info}
 
 
 if __name__ == "__main__":
@@ -176,14 +158,18 @@ if __name__ == "__main__":
 
     sys.exit(0)
 
+#Now the flow is:
 
-#The key change is `wait_for_checkpoints()` which polls every 2 minutes until `checkpoint-30000` exists for both `groot50` and `groot100` before Phase 4 runs. The terminal will show:
-#[Pipeline] ⏳ waiting: groot50  -> /rlwrld1/.../Cube_Stack-3cmRight_50pct/checkpoint-30000
-#[Pipeline] ⏳ waiting: groot100 -> /rlwrld1/.../Cube_Stack-3cmRight_100pct/checkpoint-30000
-#[Pipeline] Not ready yet — sleeping 120s...
+#python run_pipeline.py ...
+   # → Phase 1 ✅
+   # → Phase 2 ✅
+    #→ Phase 3 ✅ (SLURM jobs submitted)
+   # → phase4_watcher.py launched in background (detached)
+   # → Terminal returns immediately ✅
+   # → You can close laptop ✅
 
-#... several hours later ...
-
-#[Pipeline] ✅ checkpoint found: groot50
-#[Pipeline] ✅ checkpoint found: groot100
-#[Pipeline] All checkpoints ready — proceeding to Phase 4!
+#[background, hours later]
+    #→ phase4_watcher detects checkpoint-30000
+    #→ submits Phase 4 eval jobs
+    #→ coordinator watches eval jobs
+    #→ Slack: ✅ Phase 4 Complete
