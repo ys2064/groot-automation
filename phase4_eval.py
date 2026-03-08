@@ -42,30 +42,18 @@ MODEL_PCTS       = [50, 100]
 # ── Helpers ───────────────────────────────────────────────────────────
 
 def dataset_name_to_task_name(dataset_name: str) -> str:
-    """
-    Convert dataset_name to Isaac task_name.
-    e.g. Cylinder_Tube_Place_T15cmC7cmLeft  -> task-Cylinder_Tube_Place-T15cmC7cmLeft
-         Cube_Box_Box_5cmRight              -> task-Cube_Box_Box-5cmRight
-    Strategy: find the last segment that starts with a digit or T+digit,
-    split there: everything before = base, everything from there = suffix.
-    """
     parts = dataset_name.split("_")
-
     for i in range(len(parts) - 1, 0, -1):
         if re.match(r'^([0-9]|T[0-9])', parts[i]):
             base   = "_".join(parts[:i])
             suffix = "_".join(parts[i:])
             return f"task-{base}-{suffix}"
-
-    # Fallback: replace all underscores with dashes
     return f"task-{dataset_name.replace('_', '-')}"
 
 
 def get_instruction(task_name: str) -> str:
-    """Look up instruction from configs/eval_tasks.yaml"""
     with open(EVAL_TASKS_YAML, "r") as f:
         config = yaml.safe_load(f)
-
     tasks = config.get("tasks", {})
     if task_name not in tasks:
         raise ValueError(
@@ -76,7 +64,6 @@ def get_instruction(task_name: str) -> str:
 
 
 def get_checkpoint_path(dataset_name: str, pct: int) -> str:
-    """Build checkpoint path from phase 3 output and verify it exists"""
     ckpt = f"{TRAIN_OUTPUT_BASE}/{dataset_name}_{pct}pct/checkpoint-30000"
     if not Path(ckpt).exists():
         raise FileNotFoundError(
@@ -96,7 +83,6 @@ def generate_eval_sbatch(
     checkpoint:   str,
     partition:    str = "rlwrld"
 ) -> str:
-    """Generate one sbatch script for one model (pct) — all distances as array job"""
 
     job_name   = f"eval_{dataset_name}_{pct}pct"
     output_dir = f"{EVAL_OUTPUT_BASE}/{dataset_name}/groot{pct}"
@@ -113,11 +99,10 @@ def generate_eval_sbatch(
 #SBATCH --output={RLWRLD_ISAAC_DIR}/slurm-logs/%A_%a-{job_name}.out
 #SBATCH --error={RLWRLD_ISAAC_DIR}/slurm-logs/%A_%a-{job_name}.err
 #SBATCH --partition={partition}
+#SBATCH --qos=highprio
 #SBATCH --time=48:00:00
 #SBATCH --nodes=1
 #SBATCH --gpus=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=40G
 #SBATCH --array=0-{n_dists - 1}%{n_dists}
 
 set -e
@@ -140,6 +125,9 @@ export TOKENIZERS_PARALLELISM=false
 export TRANSFORMERS_ATTENTION_TYPES=eager
 export TRANSFORMERS_VERBOSITY=error
 export PYTHONUNBUFFERED=1
+
+source ~/.bashrc
+source {VENV}
 
 # ------------------------------------------------------------------
 # 1. Distance Array
@@ -175,8 +163,15 @@ cleanup() {{
 }}
 trap cleanup EXIT
 
-source ~/.bashrc
-source {VENV}
+# ------------------------------------------------------------------
+# ✅ Notify eval STARTED — fires only when node is Running (R)
+# ------------------------------------------------------------------
+python3 -c "
+import sys
+sys.path.insert(0, '{GROOT_DIR}/automating_groot')
+from notify import notify_eval_started
+notify_eval_started('{dataset_name}', {pct}, '${{CURRENT_DIST}}')
+"
 
 # ------------------------------------------------------------------
 # 4. Launch Isaac Sim Server
@@ -193,8 +188,28 @@ python ${{PROJECT_ROOT}}/scripts/environments/server_v2.py \\
   > "${{PROJECT_ROOT}}/slurm-logs/${{SLURM_ARRAY_JOB_ID}}_${{SLURM_ARRAY_TASK_ID}}_server.log" 2>&1 &
 allex_env_pid=$!
 
-echo "Waiting for Server on port ${{ALLEX_ENV_PORT}}..."
+# ── ✅ Wait for server with timeout — notify if it never starts ───────
+echo "Waiting for Isaac Sim Server on port ${{ALLEX_ENV_PORT}}..."
+set +e
 timeout 300s bash -c "until ss -tuln | grep -q \\":${{ALLEX_ENV_PORT}} \\"; do sleep 5; done"
+SERVER_WAIT_CODE=$?
+set -e
+
+if [ $SERVER_WAIT_CODE -ne 0 ]; then
+  echo "Isaac Sim Server did NOT start within 300s — aborting"
+  python3 -c "
+import sys
+sys.path.insert(0, '{GROOT_DIR}/automating_groot')
+from notify import notify_error
+notify_error(
+    'Phase 4 - Isaac Sim Server Timeout',
+    '{dataset_name}_{pct}pct ${{CURRENT_DIST}}',
+    'Server did not start on port ${{ALLEX_ENV_PORT}} within 300s. Check server log.'
+)
+"
+  exit 1
+fi
+
 sleep 10
 
 # ------------------------------------------------------------------
@@ -217,25 +232,44 @@ EVAL_EXIT_CODE=$?
 set -e
 
 # ------------------------------------------------------------------
-# 6. Notify Result
+# ✅ Verify 72 MP4s exist, then notify complete or error
 # ------------------------------------------------------------------
-if [ $EVAL_EXIT_CODE -eq 0 ]; then
-  echo "EVAL SUCCESS: groot{pct} ${{CURRENT_DIST}}"
-  python3 -c "
-import sys
+python3 -c "
+import sys, os, glob
 sys.path.insert(0, '{GROOT_DIR}/automating_groot')
-from notify import notify_eval_complete
-notify_eval_complete('{dataset_name}', {pct}, '${{OUTPUT_DIR}}')
+from notify import notify_eval_complete, notify_error
+
+output_dir = '${{OUTPUT_DIR}}'
+dataset    = '{dataset_name}'
+pct        = {pct}
+dist       = '${{CURRENT_DIST}}'
+eval_exit  = $EVAL_EXIT_CODE
+expected   = {N_EPISODES}
+
+# Step 1: Check eval exited cleanly
+if eval_exit != 0:
+    notify_error(
+        'Phase 4 - Evaluation Crashed',
+        f'{{dataset}}_{{pct}}pct {{dist}}',
+        f'eval_allex.py exited with code {{eval_exit}}'
+    )
+    sys.exit(1)
+
+# Step 2: Count MP4 files in output folder
+mp4_files = glob.glob(os.path.join(output_dir, '**', '*.mp4'), recursive=True)
+mp4_count = len(mp4_files)
+
+# Step 3: Notify based on count
+if mp4_count == expected:
+    notify_eval_complete(dataset, pct, dist, output_dir, mp4_count)
+else:
+    notify_error(
+        'Phase 4 - Missing Videos',
+        f'{{dataset}}_{{pct}}pct {{dist}}',
+        f'Expected {{expected}} MP4s but only found {{mp4_count}} in {{output_dir}}'
+    )
+    sys.exit(1)
 "
-else
-  echo "EVAL FAILED CODE $EVAL_EXIT_CODE: groot{pct} ${{CURRENT_DIST}}"
-  python3 -c "
-import sys
-sys.path.insert(0, '{GROOT_DIR}/automating_groot')
-from notify import notify_error
-notify_error('Phase 4 - Eval', '{dataset_name}_{pct}pct ${{CURRENT_DIST}}', 'Exit code: $EVAL_EXIT_CODE')
-"
-fi
 """
 
     Path(sbatch_path).write_text(content)
@@ -260,7 +294,8 @@ def submit_job(sbatch_path: str) -> str:
 
 def submit_eval_jobs(
     dataset_name: str,
-    partition:    str = "rlwrld"
+    partition:    str = "rlwrld",
+    task_name_override: str = None
 ) -> dict:
 
     print(f"\n{'='*60}")
@@ -270,8 +305,7 @@ def submit_eval_jobs(
     print(f"[Phase 4] Distances: {DIST_LABELS}")
     print(f"{'='*60}\n")
 
-    # Auto-derive task_name and instruction
-    task_name   = dataset_name_to_task_name(dataset_name)
+    task_name   = task_name_override if task_name_override else dataset_name_to_task_name(dataset_name)
     instruction = get_instruction(task_name)
 
     print(f"[Phase 4] Task name  : {task_name}")
@@ -304,9 +338,7 @@ def submit_eval_jobs(
         print(f"  groot{pct}  -> Job ID: {info['job_id']}  ({len(DIST_LABELS)} distances as array)")
     print(f"{'='*60}\n")
 
-    # ── Notify Slack: Eval Started ────────────────────────────────────
-    from notify import notify_eval_started
-    notify_eval_started(dataset_name, eval_job_info)
+    # Notification now fires from inside sbatch when node is Running (R)
 
     return eval_job_info
 
@@ -318,9 +350,11 @@ if __name__ == "__main__":
     parser.add_argument("--dataset-name", required=True,
                         help="e.g. Cylinder_Tube_Place_T15cmC7cmLeft")
     parser.add_argument("--partition", default="rlwrld")
+    parser.add_argument("--task-name", default=None)
     args = parser.parse_args()
 
     submit_eval_jobs(
-        dataset_name = args.dataset_name,
-        partition    = args.partition
+        dataset_name       = args.dataset_name,
+        partition          = args.partition,
+        task_name_override = args.task_name
     )

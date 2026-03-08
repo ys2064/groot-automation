@@ -6,7 +6,6 @@
 #SBATCH --gres=gpu:4
 #SBATCH --time=48:00:00
 #SBATCH --requeue
-#SBATCH --exclude=worker-node105
 
 # Standard Environment Setup
 source /rlwrld1/home/yashu/rlwrld_isaac/.venv/bin/activate
@@ -23,4 +22,21 @@ mkdir -p "$OUT_DIR"
 
 # Launch Training
 cd /rlwrld1/home/yashu/rlwrld_isaac/gr00t
-python scripts/gr00t_finetune.py   --num-gpus 4   --batch-size 32   --learning_rate 1e-4   --tune-visual   --output-dir "$OUT_DIR"   --data-config /rlwrld1/home/yashu/rlwrld_isaac/gr00t/configs/groot_Cube_Stack_3cmRight_10pct.yaml   --max-steps 30000   --save-steps 10000   --dataloader-num-workers 8
+python scripts/gr00t_finetune.py \
+  --num-gpus 4 \
+  --batch-size 32 \
+  --learning_rate 1e-4 \
+  --tune-visual \
+  --output-dir "$OUT_DIR" \
+  --data-config /rlwrld1/home/yashu/rlwrld_isaac/gr00t/configs/groot_Cube_Stack_3cmRight_10pct.yaml \
+  --max-steps 30000 \
+  --save-steps 10000 \
+  --dataloader-num-workers 8
+
+# Notify Slack: Training Complete
+python3 -c "
+import sys
+sys.path.insert(0, '/rlwrld1/home/yashu/rlwrld_isaac/gr00t/automating_groot')
+from notify import notify_training_complete
+notify_training_complete('Cube_Stack_3cmRight', 10, '$OUT_DIR')
+"

@@ -42,7 +42,7 @@ def generate_train_sbatch(
     # Write watcher as a separate Python file
     watcher_script = f"""import os, time, sys
 sys.path.insert(0, '{GROOT_DIR}/automating_groot')
-from notify import notify_checkpoint_saved
+from notify import notify_checkpoint_saved, notify_error
 
 output_dir = "{output_dir}"
 dataset    = "{dataset_name}"
@@ -51,22 +51,26 @@ notified   = set()
 
 print('[watcher] Started, watching:', output_dir, flush=True)
 
-while True:
-    time.sleep(30)
-    try:
-        entries = os.listdir(output_dir)
-    except FileNotFoundError:
-        continue
-    for entry in sorted(entries):
-        if entry.startswith('checkpoint-') and entry not in notified:
-            step = int(entry.split('-')[1])
-            ckpt_path = os.path.join(output_dir, entry)
-            print(f'[watcher] New checkpoint: {{entry}}', flush=True)
-            notify_checkpoint_saved(dataset, pct, step, ckpt_path)
-            notified.add(entry)
-    if os.path.exists(os.path.join(output_dir, '.training_done')):
-        print('[watcher] Done flag detected, exiting', flush=True)
-        break
+try:
+    while True:
+        time.sleep(30)
+        try:
+            entries = os.listdir(output_dir)
+        except FileNotFoundError:
+            continue
+        for entry in sorted(entries):
+            if entry.startswith('checkpoint-') and entry not in notified:
+                step = int(entry.split('-')[1])
+                ckpt_path = os.path.join(output_dir, entry)
+                print(f'[watcher] New checkpoint: {{entry}}', flush=True)
+                notify_checkpoint_saved(dataset, pct, step, ckpt_path)
+                notified.add(entry)
+        if os.path.exists(os.path.join(output_dir, '.training_done')):
+            print('[watcher] Done flag detected, exiting', flush=True)
+            break
+except Exception as e:
+    notify_error('Phase 3 - Checkpoint Watcher', dataset, str(e))
+    sys.exit(1)
 """
     Path(watcher_path).write_text(watcher_script)
 
@@ -79,16 +83,15 @@ while True:
 #SBATCH --time=48:00:00
 #SBATCH --requeue
 
-# Standard Environment Setup
+# ── Environment Setup ─────────────────────────────────────────────────
 source {VENV}
 
-# Hardware & Env Setup
 export PYTHONWARNINGS="ignore"
 export TOKENIZERS_PARALLELISM=false
 export OMP_NUM_THREADS=8
 export MKL_NUM_THREADS=8
 
-# Define Output
+# ── Define Output ─────────────────────────────────────────────────────
 OUT_DIR="{output_dir}"
 mkdir -p "$OUT_DIR"
 
@@ -99,6 +102,8 @@ echo "[slurm] Checkpoint watcher started with PID $WATCHER_PID"
 
 # ── Launch Training ───────────────────────────────────────────────────
 cd {GROOT_DIR}
+
+set +e
 python scripts/gr00t_finetune.py \\
   --num-gpus 4 \\
   --batch-size 32 \\
@@ -110,11 +115,29 @@ python scripts/gr00t_finetune.py \\
   --save-steps 10000 \\
   --dataloader-num-workers 8
 
+TRAIN_EXIT_CODE=$?
+set -e
+
+# ── ✅ Check training exit code ───────────────────────────────────────
+if [ $TRAIN_EXIT_CODE -ne 0 ]; then
+  echo "[slurm] Training FAILED with exit code $TRAIN_EXIT_CODE"
+  python3 -c "
+import sys
+sys.path.insert(0, '{GROOT_DIR}/automating_groot')
+from notify import notify_error
+notify_error('Phase 3 - Training Crashed', '{dataset_name}_{pct}pct', 'gr00t_finetune.py exited with code $TRAIN_EXIT_CODE')
+"
+  # Signal watcher to stop even on failure
+  touch "$OUT_DIR/.training_done"
+  wait $WATCHER_PID
+  exit $TRAIN_EXIT_CODE
+fi
+
 # ── Training Done ─────────────────────────────────────────────────────
 touch "$OUT_DIR/.training_done"   # signal watcher to stop
 wait $WATCHER_PID                 # wait for watcher to finish
 
-# ── Notify Slack: Training Complete ──────────────────────────────────
+# ── Notify Slack: Training Complete ───────────────────────────────────
 python3 -c "
 import sys
 sys.path.insert(0, '{GROOT_DIR}/automating_groot')

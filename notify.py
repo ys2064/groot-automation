@@ -114,27 +114,33 @@ def notify_error(phase: str, dataset_name: str, error: str):
     )
 
 
-# ── NEW: Phase 4 Eval Notifications ──────────────────────────────────
+# ── Phase 4 Eval Notifications ────────────────────────────────────────
 
-def notify_eval_started(dataset_name: str, eval_job_info: dict):
-    lines = "\n".join([
-        f">  `groot{pct}` -> Job ID: `{info['job_id']}`"
-        for pct, info in eval_job_info.items()
-    ])
+def notify_eval_started(dataset_name: str, pct: int, dist: str):
+    """
+    Called from INSIDE the sbatch script after env setup.
+    This means the node is actually Running (R), not Pending (PD).
+    """
     _send(
-        f"🤖 *Evaluation Started!*\n"
+        f"🤖 *Phase 4: Evaluation Started*\n"
         f">  *Dataset:*  `{dataset_name}`\n"
-        f">  *Task:*     `{list(eval_job_info.values())[0]['task_name']}`\n"
-        f"{lines}\n"
-        f">  *Time:* `{_time()}`"
+        f">  *Model:*    `groot{pct}`\n"
+        f">  *Distance:* `{dist}`\n"
+        f">  *Time:*     `{_time()}`"
     )
 
 
-def notify_eval_complete(dataset_name: str, pct: int, output_dir: str):
+def notify_eval_complete(dataset_name: str, pct: int, dist: str, output_dir: str, mp4_count: int):
+    """
+    Called only after verifying all MP4 videos are saved.
+    mp4_count is confirmed == N_EPISODES (72) before this fires.
+    """
     _send(
-        f"✅ *Evaluation Complete!*\n"
-        f">  *Dataset:* `{dataset_name}`\n"
-        f">  *Model:*   `groot{pct}`\n"
-        f">  *Results:* `{output_dir}`\n"
-        f">  *Time:*    `{_time()}`"
+        f"✅ *Phase 4: Evaluation Complete*\n"
+        f">  *Dataset:*  `{dataset_name}`\n"
+        f">  *Model:*    `groot{pct}`\n"
+        f">  *Distance:* `{dist}`\n"
+        f">  *Videos:*   `{mp4_count} / {mp4_count} MP4s verified ✓`\n"
+        f">  *Output:*   `{output_dir}`\n"
+        f">  *Time:*     `{_time()}`"
     )
