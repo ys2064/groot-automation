@@ -274,17 +274,15 @@ wait $EVAL_PID 2>/dev/null || true
 set -e
 
 # ------------------------------------------------------------------
-# 6. Verify MP4s and notify complete or error
+# 6. Verify MP4s — only notify on ERROR
+#    Success notification is handled by eval_coordinator.py
 # ------------------------------------------------------------------
 python3 -c "
 import sys, os, glob
 sys.path.insert(0, '{GROOT_DIR}/automating_groot')
-from notify import notify_eval_complete, notify_error
+from notify import notify_error
 
 output_dir = '${{OUTPUT_DIR}}'
-dataset    = '{dataset_name}'
-pct        = {pct}
-dist       = '${{CURRENT_DIST}}'
 expected   = {N_EPISODES}
 
 mp4_files = glob.glob(os.path.join(output_dir, '**', '*.mp4'), recursive=True)
@@ -292,15 +290,15 @@ mp4_count = len(mp4_files)
 
 print(f'[verify] {{mp4_count}} / {{expected}} MP4s found', flush=True)
 
-if mp4_count >= expected:
-    notify_eval_complete(dataset, pct, dist, output_dir, mp4_count)
-else:
+if mp4_count < expected:
     notify_error(
         'Phase 4 - Missing Videos',
-        f'{{dataset}}_{{pct}}pct {{dist}}',
+        '{dataset_name}_{pct}pct ${{CURRENT_DIST}}',
         f'Expected {{expected}} MP4s but only found {{mp4_count}} in {{output_dir}}'
     )
     sys.exit(1)
+
+print('[verify] MP4 count OK — coordinator will send final notification', flush=True)
 "
 """
 
@@ -327,7 +325,9 @@ def submit_job(sbatch_path: str) -> str:
 def launch_coordinator(dataset_name: str, job_ids: list, eval_job_info: dict):
     """
     Launch eval_coordinator.py as a background process on the login node.
-    Watches SLURM and fires ONE notification when all tasks are Running.
+    Watches SLURM and fires:
+      1. ONE start notification when all tasks Running
+      2. ONE combined completion notification when all tasks finish
     """
     total_tasks = len(job_ids) * len(DIST_LABELS)
     job_ids_str = ",".join(job_ids)
@@ -335,11 +335,14 @@ def launch_coordinator(dataset_name: str, job_ids: list, eval_job_info: dict):
 
     cmd = [
         "python3", COORDINATOR,
-        "--dataset-name",  dataset_name,
-        "--job-ids",       job_ids_str,
-        "--job-map",       job_map_str,
-        "--total-tasks",   str(total_tasks),
-        "--poll-interval", "30"
+        "--dataset-name",     dataset_name,
+        "--job-ids",          job_ids_str,
+        "--job-map",          job_map_str,
+        "--total-tasks",      str(total_tasks),
+        "--poll-interval",    "30",
+        "--dist-labels",      ",".join(DIST_LABELS),
+        "--n-episodes",       str(N_EPISODES),
+        "--eval-output-base", EVAL_OUTPUT_BASE,
     ]
 
     process = subprocess.Popen(
@@ -404,7 +407,6 @@ def submit_eval_jobs(
         print(f"  groot{pct}  -> Job ID: {info['job_id']}  ({len(DIST_LABELS)} distances as array)")
     print(f"{'='*60}\n")
 
-    # Launch coordinator to watch for all tasks Running
     launch_coordinator(dataset_name, submitted_job_ids, eval_job_info)
 
     return eval_job_info

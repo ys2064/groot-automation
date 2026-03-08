@@ -112,11 +112,11 @@ def notify_error(phase: str, dataset_name: str, error: str):
     )
 
 
-# Phase 4 Eval Notifications
+# ── Phase 4 Eval Notifications ─────────────────────────────────────────────
 
 def notify_eval_all_started(dataset_name: str, eval_job_info: dict):
     """
-    Fired by eval_coordinator.py once ALL array tasks are Running (R).
+    Fired by eval_coordinator.py once ALL array tasks are Running.
     One single notification instead of one per task.
     """
     lines = "\n".join([
@@ -131,17 +131,32 @@ def notify_eval_all_started(dataset_name: str, eval_job_info: dict):
     )
 
 
-def notify_eval_complete(dataset_name: str, pct: int, dist: str, output_dir: str, mp4_count: int):
+def notify_eval_all_complete(dataset_name: str, summary: dict, dist_labels: list, n_episodes: int):
     """
-    Called only after verifying all MP4 videos are saved.
-    mp4_count is confirmed == N_EPISODES (72) before this fires.
+    Fired by eval_coordinator.py once ALL jobs finish.
+    ONE combined message for all models and distances.
+    summary = { 50: {"0cm": 72, "1cm": 72, ...}, 100: {...} }
     """
+    all_good = True
+    lines    = []
+
+    for pct in sorted(summary.keys()):
+        lines.append(f">  *groot{pct}*")
+        for dist in dist_labels:
+            count  = summary[pct].get(dist, 0)
+            status = "✅" if count >= n_episodes else "❌"
+            lines.append(f">    {status}  `{dist}` → `{count}/{n_episodes} MP4s`")
+            if count < n_episodes:
+                all_good = False
+        lines.append(">")
+
+    result_line = "🎉 All videos verified!" if all_good else "⚠️ Some distances missing videos — check logs!"
+
     _send(
         f"✅ *Phase 4: Evaluation Complete*\n"
-        f">  *Dataset:*  `{dataset_name}`\n"
-        f">  *Model:*    `groot{pct}`\n"
-        f">  *Distance:* `{dist}`\n"
-        f">  *Videos:*   `{mp4_count} / {mp4_count} MP4s verified`\n"
-        f">  *Output:*   `{output_dir}`\n"
-        f">  *Time:*     `{_time()}`"
+        f">  *Dataset:* `{dataset_name}`\n"
+        f">  *Time:*    `{_time()}`\n"
+        f">\n"
+        + "\n".join(lines) +
+        f"\n>  {result_line}"
     )
