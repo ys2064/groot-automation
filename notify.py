@@ -7,9 +7,8 @@ import os
 import requests
 from datetime import datetime
 
-# ── Slack Webhook URL loaded from environment ──────────────────────────
+# Slack Webhook URL loaded from environment
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "")
-# ───────────────────────────────────────────────────────────────────────
 
 
 def _send(message: str):
@@ -114,7 +113,7 @@ def notify_error(phase: str, dataset_name: str, error: str):
     )
 
 
-# ── Phase 4 Eval Notifications ────────────────────────────────────────
+# Phase 4 Eval Notifications
 
 def notify_eval_all_started(dataset_name: str, job_ids: list, total_tasks: int):
     """
@@ -126,7 +125,7 @@ def notify_eval_all_started(dataset_name: str, job_ids: list, total_tasks: int):
         f"🤖 *Phase 4: Evaluation Started*\n"
         f">  *Dataset:*  `{dataset_name}`\n"
         f">  *Job IDs:*  {jobs_str}\n"
-        f">  *Tasks:*    `{total_tasks} nodes all Running ✅`\n"
+        f">  *Tasks:*    `{total_tasks} nodes all Running`\n"
         f">  *Time:*     `{_time()}`"
     )
 
@@ -141,18 +140,7 @@ def notify_eval_complete(dataset_name: str, pct: int, dist: str, output_dir: str
         f">  *Dataset:*  `{dataset_name}`\n"
         f">  *Model:*    `groot{pct}`\n"
         f">  *Distance:* `{dist}`\n"
-        f">  *Videos:*   `{mp4_count} / {mp4_count} MP4s verified ✓`\n"
+        f">  *Videos:*   `{mp4_count} / {mp4_count} MP4s verified`\n"
         f">  *Output:*   `{output_dir}`\n"
         f">  *Time:*     `{_time()}`"
     )
-```
-
----
-
-Notice `notify_eval_started` (old per-task function) is **completely removed** and replaced with `notify_eval_all_started` (called once by the coordinator when all nodes are R).
-
-Now you have 3 files to update and 1 new file to create:
-```
-notify.py          ← paste this ✅
-phase4_eval.py     ← paste the version from previous message ✅
-eval_coordinator.py ← create this new file ✅ (from previous message)
